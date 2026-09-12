@@ -322,6 +322,51 @@ func TestManualResume(t *testing.T) {
 	}
 }
 
+func TestRedeliveryWhileInFlightWaitsInsteadOfRequeueing(t *testing.T) {
+	f := newFixture(t, worker.Config{Concurrency: 2})
+	f.a.block = make(chan struct{})
+	ev := f.enqueue(t, "INT-8", event.OrderCreated)
+	// The same event is delivered a second time while the first is running.
+	payload, _ := json.Marshal(ev)
+	_ = f.q.Publish(context.Background(), queue.Job{ID: "job-again", CorrelationID: "INT-8", EventType: event.OrderCreated, IdempotencyKey: ev.IdempotencyKey, Payload: payload})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() { defer wg.Done(); _ = f.w.Run(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for f.a.calls.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("action never started")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // the redelivery is now waiting on the in-flight run
+	close(f.a.block)
+
+	deadline = time.Now().Add(5 * time.Second)
+	for {
+		st, err := f.repo.Get(ctx, "INT-8")
+		if err == nil && st.Status == workflow.StatusCompleted && f.q.Len() == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run did not complete cleanly: state=%v queued=%d", st, f.q.Len())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	wg.Wait()
+	if f.a.calls.Load() != 1 || f.b.calls.Load() != 1 {
+		t.Fatalf("redelivery re-executed the run: a=%d b=%d", f.a.calls.Load(), f.b.calls.Load())
+	}
+	if f.q.Len() != 0 {
+		t.Fatalf("redelivery was requeued instead of acknowledged: %d queued", f.q.Len())
+	}
+}
+
 func TestShutdownLeavesJobPendingAndStateRunning(t *testing.T) {
 	f := newFixture(t, worker.Config{Concurrency: 1})
 	f.a.block = make(chan struct{})

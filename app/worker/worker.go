@@ -203,9 +203,15 @@ func (w *Worker) handle(ctx context.Context, d queue.Delivery) {
 	}
 
 	if !w.acquire(job.CorrelationID) {
-		log.Info("run already in progress; requeueing job")
-		w.requeue(ctx, d, log)
-		return
+		// A redelivery of a run this process is already executing. Wait for
+		// it rather than bouncing the job through the queue, which would
+		// burn delivery attempts; the state check below then acknowledges
+		// a finished run or resumes an unfinished one.
+		if !w.waitInflight(ctx, job.CorrelationID) || !w.acquire(job.CorrelationID) {
+			log.Info("run still in progress; requeueing job")
+			w.requeue(ctx, d, log)
+			return
+		}
 	}
 	defer w.release(job.CorrelationID)
 
@@ -426,4 +432,28 @@ func (w *Worker) isInflight(id string) bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.inflight[id]
+}
+
+// inflightWait bounds how long a redelivery waits for the in-flight run.
+const inflightWait = 10 * time.Second
+
+// waitInflight reports true once id is no longer in flight, or false when
+// the wait times out or ctx ends.
+func (w *Worker) waitInflight(ctx context.Context, id string) bool {
+	deadline := time.NewTimer(inflightWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if !w.isInflight(id) {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-deadline.C:
+			return false
+		case <-tick.C:
+		}
+	}
 }
