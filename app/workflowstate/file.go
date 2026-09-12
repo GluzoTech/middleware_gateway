@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/gluzo/integration-gateway/app/correlation"
 	"github.com/gluzo/integration-gateway/app/workflow"
@@ -106,6 +107,33 @@ func (r *FileRepository) ListActive(_ context.Context) ([]string, error) {
 	return ids, nil
 }
 
+// DeleteCompletedBefore removes completed state files last modified before
+// cutoff and reports how many were removed. Active runs are never touched.
+func (r *FileRepository) DeleteCompletedBefore(cutoff time.Time) (int, error) {
+	dir := filepath.Join(r.root, CompletedDir)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, fmt.Errorf("workflowstate: list completed: %w", err)
+	}
+	var removed int
+	var errs []error
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(dir, e.Name())); err != nil && !errors.Is(err, os.ErrNotExist) {
+			errs = append(errs, err)
+			continue
+		}
+		removed++
+	}
+	return removed, errors.Join(errs...)
+}
+
 func (r *FileRepository) path(dir, correlationID string) string {
 	return filepath.Join(r.root, dir, correlationID+".json")
 }
@@ -135,9 +163,26 @@ func writeAtomically(path string, data []byte) error {
 		cleanup()
 		return err
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := renameWithRetry(tmpName, path); err != nil {
 		cleanup()
 		return err
 	}
 	return nil
+}
+
+// renameWithRetry retries a rename that fails because another handle still
+// has the destination open, which Windows reports as a sharing violation or
+// access denied. Readers such as the admin viewer hold a state file only for
+// the duration of one read, so a short series of retries suffices; POSIX
+// systems succeed on the first attempt.
+func renameWithRetry(from, to string) error {
+	const attempts = 40
+	var err error
+	for i := 0; i < attempts; i++ {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	return err
 }

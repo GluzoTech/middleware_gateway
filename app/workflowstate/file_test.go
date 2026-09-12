@@ -146,6 +146,82 @@ func TestFileRepositoryOverwritesAtomically(t *testing.T) {
 	}
 }
 
+// TestFileRepositoryWritesWhileBeingRead reproduces a worker persisting
+// state while a reader (the admin viewer) is polling the same file, which on
+// Windows makes the atomic rename fail unless it is retried.
+func TestFileRepositoryWritesWhileBeingRead(t *testing.T) {
+	ctx := context.Background()
+	repo, _ := workflowstate.NewFileRepository(t.TempDir())
+	st := sampleState("INT-concurrent")
+	if err := repo.Save(ctx, st); err != nil {
+		t.Fatalf("initial Save: %v", err)
+	}
+
+	stop := make(chan struct{})
+	readerDone := make(chan struct{})
+	go func() {
+		defer close(readerDone)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				_, _ = repo.Get(ctx, "INT-concurrent")
+			}
+		}
+	}()
+	for i := 0; i < 50; i++ {
+		st.CurrentAction = i
+		if err := repo.Save(ctx, st); err != nil {
+			close(stop)
+			<-readerDone
+			t.Fatalf("Save %d while being read: %v", i, err)
+		}
+	}
+	close(stop)
+	<-readerDone
+	got, err := repo.Get(ctx, "INT-concurrent")
+	if err != nil || got.CurrentAction != 49 {
+		t.Fatalf("final state: %+v %v", got, err)
+	}
+}
+
+func TestFileRepositoryDeleteCompletedBefore(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	repo, _ := workflowstate.NewFileRepository(root)
+
+	old := sampleState("INT-old")
+	old.Status = workflow.StatusCompleted
+	recent := sampleState("INT-recent")
+	recent.Status = workflow.StatusSkipped
+	active := sampleState("INT-active")
+	active.Status = workflow.StatusFailed
+	for _, st := range []*workflow.State{old, recent, active} {
+		if err := repo.Save(ctx, st); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+	past := time.Now().Add(-48 * time.Hour)
+	if err := os.Chtimes(filepath.Join(root, workflowstate.CompletedDir, "INT-old.json"), past, past); err != nil {
+		t.Fatalf("Chtimes: %v", err)
+	}
+
+	removed, err := repo.DeleteCompletedBefore(time.Now().Add(-24 * time.Hour))
+	if err != nil || removed != 1 {
+		t.Fatalf("removed = %d, %v", removed, err)
+	}
+	if _, err := repo.Get(ctx, "INT-old"); !errors.Is(err, workflow.ErrStateNotFound) {
+		t.Fatalf("old completed state survived: %v", err)
+	}
+	if _, err := repo.Get(ctx, "INT-recent"); err != nil {
+		t.Fatalf("recent completed state deleted: %v", err)
+	}
+	if _, err := repo.Get(ctx, "INT-active"); err != nil {
+		t.Fatalf("active state deleted: %v", err)
+	}
+}
+
 func TestMemoryRepository(t *testing.T) {
 	ctx := context.Background()
 	repo := workflowstate.NewMemoryRepository()
