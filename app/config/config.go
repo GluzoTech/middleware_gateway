@@ -33,8 +33,15 @@ type Config struct {
 	Storage  Storage
 	Queue    Queue
 	Worker   Worker
+	Admin    Admin
 	EasyEcom EasyEcom
 	Dabur    Dabur
+}
+
+// Admin protects the operator endpoints. An empty token leaves them
+// unmounted.
+type Admin struct {
+	LogViewerToken string
 }
 
 // Worker tunes the in-process job worker. Enabled=false runs an API-only
@@ -123,9 +130,10 @@ type Redis struct {
 
 // Storage holds file-system locations for execution logs and workflow state.
 type Storage struct {
-	LogDirectory      string
-	WorkflowDirectory string
-	LogRetentionDays  int
+	LogDirectory         string
+	WorkflowDirectory    string
+	LogRetentionDays     int
+	LogRetentionInterval time.Duration
 }
 
 // Lookup resolves an environment variable, reporting whether it was set.
@@ -167,9 +175,13 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			ConnectTimeout: r.duration("REDIS_CONNECT_TIMEOUT", 5*time.Second),
 		},
 		Storage: Storage{
-			LogDirectory:      r.str("LOG_DIRECTORY", "./storage/logs"),
-			WorkflowDirectory: r.str("WORKFLOW_DIRECTORY", "./storage/workflows"),
-			LogRetentionDays:  r.int("LOG_RETENTION_DAYS", 30),
+			LogDirectory:         r.str("LOG_DIRECTORY", "./storage/logs"),
+			WorkflowDirectory:    r.str("WORKFLOW_DIRECTORY", "./storage/workflows"),
+			LogRetentionDays:     r.int("LOG_RETENTION_DAYS", 30),
+			LogRetentionInterval: r.duration("LOG_RETENTION_INTERVAL", time.Hour),
+		},
+		Admin: Admin{
+			LogViewerToken: r.str("ADMIN_LOG_VIEWER_TOKEN", ""),
 		},
 		Queue: Queue{
 			Stream:        r.str("QUEUE_STREAM", "gluzo:jobs"),
@@ -285,6 +297,7 @@ func (c *Config) Validate() error {
 		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
+		{"LOG_RETENTION_INTERVAL", c.Storage.LogRetentionInterval},
 		{"WORKER_RECOVERY_INTERVAL", c.Worker.RecoveryInterval},
 		{"WORKER_STALE_RUNNING_AFTER", c.Worker.StaleRunningAfter},
 		{"WORKER_RETRY_FAILED_AFTER", c.Worker.RetryFailedAfter},

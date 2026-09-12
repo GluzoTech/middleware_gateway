@@ -5,9 +5,11 @@ package httpserver
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/gluzo/integration-gateway/app/admin"
 	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpserver/middleware"
@@ -26,6 +28,11 @@ type Dependencies struct {
 	PlatformKeys auth.PlatformKeyVerifier
 	AccessTokens auth.AccessTokenVerifier
 	Webhooks     []*webhook.Handler
+
+	// Operator endpoints under /admin, mounted only when both a handler and
+	// a token are configured.
+	Admin      *admin.Handler
+	AdminToken string
 }
 
 // NewRouter builds the HTTP routing table with the shared middleware chain.
@@ -62,6 +69,10 @@ func NewRouter(deps Dependencies) *gin.Engine {
 		)
 		group.POST("", h.Handle)
 		group.POST("/:event", h.Handle)
+	}
+
+	if deps.Admin != nil && strings.TrimSpace(deps.AdminToken) != "" {
+		deps.Admin.Register(r.Group("/admin", auth.RequireAdminToken(deps.AdminToken, deps.Logger)))
 	}
 
 	r.NoRoute(func(c *gin.Context) {

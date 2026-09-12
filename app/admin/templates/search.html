@@ -1,0 +1,53 @@
+{{template "head" "Integration logs"}}
+<h1>Integration logs</h1>
+<form class="search" method="get" action="/admin/logs">
+  <label>Correlation ID <input name="correlation_id" value="{{.Form.CorrelationID}}" placeholder="INT-…"></label>
+  <label>External order ID <input name="external_order_id" value="{{.Form.ExternalOrderID}}" placeholder="EasyEcom order_id"></label>
+  <label>Destination order ID <input name="order_id" value="{{.Form.OrderID}}" placeholder="Uniware code"></label>
+  <label>Integration <input name="integration" value="{{.Form.Integration}}" placeholder="dabur"></label>
+  <label>Platform <input name="platform" value="{{.Form.Platform}}" placeholder="easyecom"></label>
+  <label>Workflow <input name="workflow" value="{{.Form.Workflow}}" placeholder="ORDER_SYNC"></label>
+  <label>Action <input name="action" value="{{.Form.Action}}" placeholder="UPDATE_DESTINATION_ORDER"></label>
+  <label>Status
+    <select name="status">
+      <option value="" {{if eq .Form.Status ""}}selected{{end}}>any</option>
+      <option value="SUCCESS" {{if eq .Form.Status "SUCCESS"}}selected{{end}}>SUCCESS</option>
+      <option value="FAILED" {{if eq .Form.Status "FAILED"}}selected{{end}}>FAILED</option>
+      <option value="SKIPPED" {{if eq .Form.Status "SKIPPED"}}selected{{end}}>SKIPPED</option>
+      <option value="DUPLICATE" {{if eq .Form.Status "DUPLICATE"}}selected{{end}}>DUPLICATE</option>
+      <option value="STARTED" {{if eq .Form.Status "STARTED"}}selected{{end}}>STARTED</option>
+    </select>
+  </label>
+  <label>Date from <input name="date_from" value="{{.Form.DateFrom}}" placeholder="YYYY-MM-DD"></label>
+  <label>Date to <input name="date_to" value="{{.Form.DateTo}}" placeholder="YYYY-MM-DD"></label>
+  <label>Limit <input name="limit" value="{{if .Form.Limit}}{{.Form.Limit}}{{end}}" placeholder="200"></label>
+  <label>Errors only <input type="checkbox" name="errors_only" value="true" {{if .Form.ErrorsOnly}}checked{{end}}></label>
+  <div class="actions"><button type="submit">Search</button> <a href="/admin/logs">Reset</a></div>
+</form>
+{{if .Problem}}<p class="problem">{{.Problem}}</p>{{end}}
+{{if .Entries}}
+<div class="wrap">
+<table>
+  <thead><tr><th>Time (UTC)</th><th>Correlation</th><th>Workflow</th><th>Integration</th><th>External order</th><th>Action</th><th>Status</th><th>Attempt</th><th>ms</th><th>Error</th></tr></thead>
+  <tbody>
+  {{range .Entries}}
+  <tr>
+    <td>{{.Timestamp.Format "2006-01-02 15:04:05"}}</td>
+    <td><a href="/admin/logs/{{.CorrelationID}}"><code>{{.CorrelationID}}</code></a></td>
+    <td>{{.Workflow}}</td>
+    <td>{{.Integration}}</td>
+    <td>{{.ExternalOrderID}}</td>
+    <td>{{.Action}}</td>
+    <td class="{{if eq .Status "SUCCESS"}}ok{{else if eq .Status "FAILED"}}bad{{else}}muted{{end}}">{{mark .Status}} {{.Status}}</td>
+    <td>{{if .Attempt}}{{.Attempt}}{{end}}</td>
+    <td>{{if .DurationMS}}{{ms .DurationMS}}{{end}}</td>
+    <td class="wrapcell">{{if .Error}}<span class="badge">{{.Error.Category}}</span> {{.Error.Message}}{{if .Error.ExternalMessage}} — {{.Error.ExternalMessage}}{{end}}{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+<p class="muted">{{if .Problem}}{{else}}Enter a filter to search. Available days: {{range $i, $d := .Days}}{{if $i}}, {{end}}{{$d}}{{end}}{{if not .Days}}none yet{{end}}.{{end}}</p>
+{{end}}
+{{template "foot"}}

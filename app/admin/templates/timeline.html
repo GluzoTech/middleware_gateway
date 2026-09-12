@@ -1,0 +1,60 @@
+{{template "head" "Timeline"}}
+<p><a href="/admin/logs">← Search</a></p>
+<h1>Correlation <code>{{.View.CorrelationID}}</code></h1>
+{{with .View.State}}
+<dl>
+  <dt>Workflow</dt><dd>{{.WorkflowName}} <span class="badge">{{.EventType}}</span></dd>
+  <dt>Status</dt><dd class="{{if eq (print .Status) "COMPLETED"}}ok{{else if eq (print .Status) "FAILED"}}bad{{else}}muted{{end}}">{{.Status}}{{if .SkipReason}} — {{.SkipReason}}{{end}}</dd>
+  <dt>Platform → destination</dt><dd>{{.Platform}}{{if .Route}} → {{.Route.DestinationPlatform}} ({{.Route.IntegrationName}}, {{.Route.RouteType}}={{.Route.RouteValue}}{{if .Route.DestinationReference}}, {{.Route.DestinationReference}}{{end}}){{end}}</dd>
+  <dt>External order</dt><dd>{{.Event.ExternalOrderID}}{{if .Event.ReferenceCode}} · ref {{.Event.ReferenceCode}}{{end}}</dd>
+  {{with index .Results "destination_order_id"}}<dt>Destination order</dt><dd>{{.}}</dd>{{end}}
+  <dt>Progress</dt><dd>{{if .LastSuccessfulAction}}last success {{.LastSuccessfulAction}}{{else}}no action completed yet{{end}}{{if .NextAction}} · next {{.NextAction}}{{end}} · resumed {{.ResumeCount}}×</dd>
+  {{with .LastError}}<dt>Last error</dt><dd class="bad"><span class="badge">{{.Category}}</span> {{.Message}}{{if .ExternalMessage}} — {{.ExternalMessage}}{{end}}{{if .Retryable}} (retryable){{end}}</dd>{{end}}
+  <dt>Updated</dt><dd>{{.UpdatedAt.UTC.Format "2006-01-02 15:04:05"}}</dd>
+</dl>
+<h2>Actions</h2>
+<div class="wrap">
+<table>
+  <thead><tr><th>#</th><th>Action</th><th>Status</th><th>Attempts</th><th>ms</th><th>Last error</th></tr></thead>
+  <tbody>
+  {{range $i, $a := .Actions}}
+  <tr>
+    <td>{{$i}}</td>
+    <td class="{{if eq (print $a.Status) "SUCCESS"}}ok{{else if eq (print $a.Status) "FAILED"}}bad{{else}}muted{{end}}">{{mark $a.Status}} {{$a.Name}}</td>
+    <td>{{$a.Status}}</td>
+    <td>{{$a.Attempt}}</td>
+    <td>{{if $a.DurationMS}}{{ms $a.DurationMS}}{{end}}</td>
+    <td class="wrapcell">{{with $a.LastError}}<span class="badge">{{.Category}}</span> {{.Message}}{{if .ExternalMessage}} — {{.ExternalMessage}}{{end}}{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{if $.View.CanResume}}
+<form method="post" action="/admin/workflows/{{.CorrelationID}}/resume"><button type="submit">Resume from {{.NextAction}}</button></form>
+{{end}}
+{{end}}
+<h2>Execution log</h2>
+{{if .View.Entries}}
+<div class="wrap">
+<table>
+  <thead><tr><th>Time (UTC)</th><th>Action</th><th>Status</th><th>Attempt</th><th>ms</th><th>Integration</th><th>Details</th></tr></thead>
+  <tbody>
+  {{range .View.Entries}}
+  <tr>
+    <td>{{.Timestamp.Format "2006-01-02 15:04:05.000"}}</td>
+    <td class="{{if eq .Status "SUCCESS"}}ok{{else if eq .Status "FAILED"}}bad{{else}}muted{{end}}">{{mark .Status}} {{.Action}}</td>
+    <td>{{.Status}}</td>
+    <td>{{if .Attempt}}{{.Attempt}}{{end}}</td>
+    <td>{{if .DurationMS}}{{ms .DurationMS}}{{end}}</td>
+    <td>{{.Integration}}</td>
+    <td class="wrapcell">{{with .Error}}<span class="badge">{{.Category}}</span> {{.Message}}{{if .ExternalMessage}} — {{.ExternalMessage}}{{end}}{{if .Detail}} <span class="muted">({{.Detail}})</span>{{end}}{{end}}{{range $k, $v := .Details}} <span class="muted">{{$k}}={{$v}}</span>{{end}}</td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+<p class="muted">No log entries for this correlation ID.</p>
+{{end}}
+{{template "foot"}}
