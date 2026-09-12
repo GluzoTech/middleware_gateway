@@ -57,12 +57,15 @@ app/health        liveness and readiness endpoints
 app/httpclient    resilient HTTP client for external APIs
 app/httpserver    router, middleware, hardened HTTP server
 app/idempotency   duplicate-event protection
-app/integrations  platform adapters (EasyEcom today; Dabur next)
+app/integrations  platform adapters (EasyEcom source, Dabur/Uniware destination)
 app/intlog        integration execution log contract
 app/logging       structured application logger
 app/queue         job queue (in-memory and Redis Streams)
 app/routing       database-backed integration routing
 app/webhook       webhook intake
+app/worker        job consumer, recovery and manual resume
+app/workflow      workflow engine and the ORDER_SYNC workflow
+app/workflowstate atomic file-based workflow state
 tests/            integration tests against a real PostgreSQL
 docs/             architecture and operational documentation
 storage/          runtime logs and workflow state (not committed)
@@ -75,5 +78,7 @@ storage/          runtime logs and workflow state (not committed)
 - [Webhook flow](docs/webhook-flow.md)
 - [Idempotency](docs/idempotency.md)
 - [Routing](docs/routing.md)
+- [Workflow engine](docs/workflow-engine.md)
+- [Retry strategy](docs/retry-strategy.md)
 - [Integrations](docs/integrations.md)
 - [Deployment](docs/deployment.md)

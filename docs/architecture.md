@@ -76,9 +76,11 @@ model only.
 | `app/queue` | Job model, Publisher/Consumer contracts, in-memory queue; `redisqueue` on Redis Streams | 3 |
 | `app/webhook` | Platform-neutral event model, validation, intake handler | 3 |
 | `app/routing` | Database-backed integration routing scoped to the authenticated integration | 5 |
-| `app/workflow` | Workflow engine, state, actions, registry | 6 |
-| `app/integrations/dabur` | Dabur/Uniware client, DTOs, endpoints, mappers | 8 |
-| `app/workflow_state` | Atomic file-based workflow state repository | 9 |
+| `app/workflow` | Workflow engine: state, actions, policies, registry, executor with per-action retry and resume | 6 |
+| `app/workflow/ordersync` | The ORDER_SYNC workflow and the Source/Destination adapter contracts | 6 |
+| `app/worker` | Queue consumer, recovery of interrupted and transiently failed runs, manual resume | 7 |
+| `app/integrations/dabur` | Dabur/Uniware OAuth client, DTOs, endpoints, mappers, destination adapter | 8 |
+| `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
 | `app/logging` (integration logger) | Append-only JSONL execution logs, sanitiser, retention | 10 |
 | `app/admin` | Protected log viewer | 11 |
 
@@ -193,6 +195,28 @@ delays and disables the trigger after enough failures. So duplicates,
 batches containing already-seen orders and empty payloads are all
 acknowledged with 200/202; only malformed or unauthenticated requests are
 rejected, and infrastructure outages return 503 so the retry is useful.
+
+### ADR-013: Workflows speak to platforms through Source and Destination contracts
+
+The ORDER_SYNC actions call `Source.FetchOrder`, `Destination.PrepareOrder`,
+`Destination.SubmitOrder` and so on; they never see an EasyEcom or Uniware
+type. Mapping to the destination document (`MAP_ORDER`) is a separate action
+from sending it (`UPDATE_DESTINATION_ORDER`) so that a mapping defect and a
+destination outage are distinguishable in the log and retried differently
+(never versus five times). The prepared document is stored opaquely in the
+workflow state, so a resumed run submits exactly what was mapped. Adding a
+destination is an adapter plus routes; the workflow does not change.
+
+### ADR-014: Recovery resumes, never replays
+
+The worker acknowledges a job only when its run reached a durable outcome.
+A shutdown mid-action leaves the state `RUNNING` and the job pending; on the
+next start every `RUNNING` run is resumed at its current action, and an
+attempt that was in flight when the process stopped does not count against
+the retry budget because its outcome is unknown. Failed runs whose last
+error was transient are resumed automatically after a cooling period, up to
+`WORKER_MAX_AUTO_RESUMES`; permanent failures wait for an operator. Runs
+never restart from the first action.
 
 ### ADR-008: Integration tests run against a real, embedded PostgreSQL
 

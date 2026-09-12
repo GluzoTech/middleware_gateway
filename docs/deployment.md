@@ -41,6 +41,26 @@ secret manager. Never commit `.env`.
 | `EASYECOM_JWT_TOKEN` | | Pre-issued JWT (alternative to login) |
 | `EASYECOM_EMAIL`, `EASYECOM_PASSWORD`, `EASYECOM_LOCATION_KEY` | | Login credentials used to obtain a JWT |
 | `EASYECOM_TIMEOUT` | `15s` | Per-attempt timeout for EasyEcom calls |
+| `DABUR_BASE_URL` | | Uniware tenant host, e.g. `https://<tenant>.unicommerce.com` |
+| `DABUR_USERNAME`, `DABUR_PASSWORD` | | Uniware API user (OAuth password grant) |
+| `DABUR_CLIENT_ID` | `my-trusted-client` | OAuth client id documented by Uniware |
+| `DABUR_DEFAULT_FACILITY` | | Facility used when a route has no destination reference |
+| `DABUR_CHANNEL` | | Channel code stamped on created orders |
+| `DABUR_SHELF_CODE` | `DEFAULT` | Shelf receiving inventory adjustments |
+| `DABUR_VERIFICATION_REQUIRED` | `false` | Hold created orders for manual verification |
+| `DABUR_TIMEOUT` | `20s` | Per-attempt timeout for Uniware calls |
+| `WORKER_ENABLED` | `true` | Run the job worker in this process; `false` gives an intake-only instance |
+| `WORKER_CONCURRENCY` | `4` | Jobs processed concurrently |
+| `WORKER_MAX_AUTO_RESUMES` | `3` | Automatic resumes of a failed run with a transient error |
+| `WORKER_RECOVERY_INTERVAL` | `5m` | How often active runs are scanned |
+| `WORKER_STALE_RUNNING_AFTER` | `10m` | Age after which a running run is treated as abandoned by a periodic scan |
+| `WORKER_RETRY_FAILED_AFTER` | `1m` | Cooling period before a transient failure is resumed |
+
+When the worker is enabled, EasyEcom and Dabur credentials are required and
+validated at startup. Run intake-only instances (`WORKER_ENABLED=false`)
+without them. Workflow state is stored on local disk under
+`WORKFLOW_DIRECTORY`, so each worker instance owns the runs it started;
+scale by adding instances behind the same Redis stream.
 | `LOG_DIRECTORY` | `./storage/logs` | Root of date-partitioned JSONL execution logs |
 | `WORKFLOW_DIRECTORY` | `./storage/workflows` | Root of workflow state files |
 | `LOG_RETENTION_DAYS` | `30` | Days of execution logs to keep |
