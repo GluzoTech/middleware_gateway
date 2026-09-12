@@ -74,6 +74,37 @@ func TestLoadFrom(t *testing.T) {
 			wantErr: "QUEUE_MAX_DELIVERIES must be at least 1",
 		},
 		{
+			name: "worker and dabur settings are read",
+			env: merge(base, map[string]string{
+				"WORKER_ENABLED":              "false",
+				"WORKER_CONCURRENCY":          "2",
+				"DABUR_BASE_URL":              "https://dabur.unicommerce.com",
+				"DABUR_USERNAME":              "api",
+				"DABUR_PASSWORD":              "pw",
+				"DABUR_DEFAULT_FACILITY":      "DEL",
+				"DABUR_VERIFICATION_REQUIRED": "true",
+			}),
+			check: func(t *testing.T, cfg *config.Config) {
+				if cfg.Worker.Enabled || cfg.Worker.Concurrency != 2 || cfg.Worker.MaxAutoResumes != 3 {
+					t.Errorf("worker config = %+v", cfg.Worker)
+				}
+				d := cfg.Dabur
+				if d.BaseURL != "https://dabur.unicommerce.com" || d.Username != "api" || d.Password != "pw" || d.DefaultFacility != "DEL" || !d.VerificationRequired || d.ClientID != "my-trusted-client" || d.ShelfCode != "DEFAULT" {
+					t.Errorf("dabur config = %+v", d)
+				}
+			},
+		},
+		{
+			name:    "worker enabled must be boolean",
+			env:     merge(base, map[string]string{"WORKER_ENABLED": "maybe"}),
+			wantErr: "WORKER_ENABLED: expected true or false",
+		},
+		{
+			name:    "worker concurrency must be positive",
+			env:     merge(base, map[string]string{"WORKER_CONCURRENCY": "0"}),
+			wantErr: "WORKER_CONCURRENCY must be at least 1",
+		},
+		{
 			name: "easyecom credentials are read",
 			env: merge(base, map[string]string{
 				"EASYECOM_API_KEY":      "key",

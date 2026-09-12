@@ -32,7 +32,34 @@ type Config struct {
 	Redis    Redis
 	Storage  Storage
 	Queue    Queue
+	Worker   Worker
 	EasyEcom EasyEcom
+	Dabur    Dabur
+}
+
+// Worker tunes the in-process job worker. Enabled=false runs an API-only
+// instance that accepts webhooks but executes nothing.
+type Worker struct {
+	Enabled           bool
+	Concurrency       int
+	MaxAutoResumes    int
+	RecoveryInterval  time.Duration
+	StaleRunningAfter time.Duration
+	RetryFailedAfter  time.Duration
+}
+
+// Dabur holds credentials for Dabur's Uniware tenant. Presence is validated
+// when the Dabur client is built (worker enabled).
+type Dabur struct {
+	BaseURL              string
+	Username             string
+	Password             string
+	ClientID             string
+	DefaultFacility      string
+	Channel              string
+	ShelfCode            string
+	VerificationRequired bool
+	Timeout              time.Duration
 }
 
 // Queue tunes the Redis Streams job queue.
@@ -153,6 +180,14 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			MaxDeliveries: r.int("QUEUE_MAX_DELIVERIES", 5),
 			MaxLen:        r.int64("QUEUE_MAX_LEN", 100_000),
 		},
+		Worker: Worker{
+			Enabled:           r.bool("WORKER_ENABLED", true),
+			Concurrency:       r.int("WORKER_CONCURRENCY", 4),
+			MaxAutoResumes:    r.int("WORKER_MAX_AUTO_RESUMES", 3),
+			RecoveryInterval:  r.duration("WORKER_RECOVERY_INTERVAL", 5*time.Minute),
+			StaleRunningAfter: r.duration("WORKER_STALE_RUNNING_AFTER", 10*time.Minute),
+			RetryFailedAfter:  r.duration("WORKER_RETRY_FAILED_AFTER", time.Minute),
+		},
 		EasyEcom: EasyEcom{
 			BaseURL:     r.str("EASYECOM_BASE_URL", "https://api.easyecom.io"),
 			APIKey:      r.str("EASYECOM_API_KEY", ""),
@@ -161,6 +196,17 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			Password:    r.str("EASYECOM_PASSWORD", ""),
 			LocationKey: r.str("EASYECOM_LOCATION_KEY", ""),
 			Timeout:     r.duration("EASYECOM_TIMEOUT", 15*time.Second),
+		},
+		Dabur: Dabur{
+			BaseURL:              r.str("DABUR_BASE_URL", ""),
+			Username:             r.str("DABUR_USERNAME", ""),
+			Password:             r.str("DABUR_PASSWORD", ""),
+			ClientID:             r.str("DABUR_CLIENT_ID", "my-trusted-client"),
+			DefaultFacility:      r.str("DABUR_DEFAULT_FACILITY", ""),
+			Channel:              r.str("DABUR_CHANNEL", ""),
+			ShelfCode:            r.str("DABUR_SHELF_CODE", "DEFAULT"),
+			VerificationRequired: r.bool("DABUR_VERIFICATION_REQUIRED", false),
+			Timeout:              r.duration("DABUR_TIMEOUT", 20*time.Second),
 		},
 	}
 
@@ -218,6 +264,12 @@ func (c *Config) Validate() error {
 	if c.Queue.MaxLen < 1 {
 		errs = append(errs, errors.New("QUEUE_MAX_LEN must be at least 1"))
 	}
+	if c.Worker.Concurrency < 1 {
+		errs = append(errs, errors.New("WORKER_CONCURRENCY must be at least 1"))
+	}
+	if c.Worker.MaxAutoResumes < 0 {
+		errs = append(errs, errors.New("WORKER_MAX_AUTO_RESUMES must not be negative"))
+	}
 
 	durations := []struct {
 		name  string
@@ -233,6 +285,10 @@ func (c *Config) Validate() error {
 		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
+		{"WORKER_RECOVERY_INTERVAL", c.Worker.RecoveryInterval},
+		{"WORKER_STALE_RUNNING_AFTER", c.Worker.StaleRunningAfter},
+		{"WORKER_RETRY_FAILED_AFTER", c.Worker.RetryFailedAfter},
+		{"DABUR_TIMEOUT", c.Dabur.Timeout},
 	}
 	for _, d := range durations {
 		if d.value <= 0 {
@@ -277,6 +333,19 @@ func (r *reader) int(key string, def int) int {
 		return def
 	}
 	return n
+}
+
+func (r *reader) bool(key string, def bool) bool {
+	v, ok := r.raw(key)
+	if !ok {
+		return def
+	}
+	b, err := strconv.ParseBool(v)
+	if err != nil {
+		r.errs = append(r.errs, fmt.Errorf("%s: expected true or false, got %q", key, v))
+		return def
+	}
+	return b
 }
 
 func (r *reader) int64(key string, def int64) int64 {

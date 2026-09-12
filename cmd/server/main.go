@@ -1,27 +1,40 @@
-// Command server runs the Gluzo Integration Gateway HTTP service.
+// Command server runs the Gluzo Integration Gateway: the webhook intake API
+// and, unless WORKER_ENABLED=false, the job worker that executes workflows.
 package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/config"
 	"github.com/gluzo/integration-gateway/app/database/migrations"
 	"github.com/gluzo/integration-gateway/app/database/postgres"
 	"github.com/gluzo/integration-gateway/app/database/redisconn"
+	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpserver"
 	"github.com/gluzo/integration-gateway/app/idempotency"
+	"github.com/gluzo/integration-gateway/app/integrations/dabur"
 	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
+	"github.com/gluzo/integration-gateway/app/intlog"
 	"github.com/gluzo/integration-gateway/app/logging"
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
+	"github.com/gluzo/integration-gateway/app/routing"
 	"github.com/gluzo/integration-gateway/app/webhook"
+	"github.com/gluzo/integration-gateway/app/worker"
+	"github.com/gluzo/integration-gateway/app/workflow"
+	"github.com/gluzo/integration-gateway/app/workflow/ordersync"
+	"github.com/gluzo/integration-gateway/app/workflowstate"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -93,15 +106,35 @@ func run() error {
 		return err
 	}
 
+	// The integration log recorder; replaced by the JSONL writer in the
+	// logging phase.
+	var recorder intlog.Recorder = intlog.Nop{}
+
 	credentials := auth.NewStore(pool)
 	idempotencyStore := idempotency.NewPostgresStore(pool)
-	easyecomWebhook := webhook.NewHandler(easyecom.WebhookParser{}, idempotencyStore, jobQueue, logger)
+	easyecomWebhook := webhook.NewHandler(easyecom.WebhookParser{}, idempotencyStore, jobQueue, logger, webhook.WithRecorder(recorder))
+
+	stateRepo, err := workflowstate.NewFileRepository(cfg.Storage.WorkflowDirectory)
+	if err != nil {
+		return err
+	}
+	executor := workflow.NewExecutor(stateRepo, workflow.WithRecorder(recorder), workflow.WithLogger(logger))
+	registry := workflow.NewRegistry()
+
+	var jobWorker *worker.Worker
+	if cfg.Worker.Enabled {
+		jobWorker, err = buildWorker(cfg, pool, jobQueue, registry, executor, stateRepo, idempotencyStore, recorder, logger)
+		if err != nil {
+			return err
+		}
+	} else {
+		logger.Warn("worker disabled: this instance accepts webhooks but executes no workflows")
+	}
 
 	healthHandler := health.NewHandler(config.ServiceName, version, readinessTimeout, logger,
 		postgres.Checker{Pool: pool},
 		redisconn.Checker{Client: rdb},
 	)
-
 	router := httpserver.NewRouter(httpserver.Dependencies{
 		Logger:       logger,
 		Health:       healthHandler,
@@ -112,6 +145,107 @@ func run() error {
 	})
 	srv := httpserver.New(cfg.App.Port, cfg.HTTP, router)
 
-	logger.Info("starting gateway", slog.Int("port", cfg.App.Port))
-	return httpserver.Run(ctx, srv, cfg.App.ShutdownTimeout, logger)
+	// The HTTP server and the worker share the signal context: the first
+	// failure cancels the other, and a signal drains both.
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		logger.Info("starting gateway", slog.Int("port", cfg.App.Port), slog.Bool("worker", jobWorker != nil))
+		if err := httpserver.Run(ctx, srv, cfg.App.ShutdownTimeout, logger); err != nil {
+			errs <- err
+			stop()
+		}
+	}()
+	if jobWorker != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := jobWorker.Run(ctx); err != nil {
+				errs <- err
+				stop()
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	var failures []error
+	for err := range errs {
+		failures = append(failures, err)
+	}
+	logger.Info("gateway stopped")
+	return errors.Join(failures...)
+}
+
+// buildWorker assembles the adapters, the ORDER_SYNC workflow and the worker.
+// Outbound credentials are validated here, so an instance that only receives
+// webhooks (WORKER_ENABLED=false) can run without them.
+func buildWorker(
+	cfg *config.Config,
+	pool *pgxpool.Pool,
+	jobQueue *redisqueue.Queue,
+	registry *workflow.Registry,
+	executor *workflow.Executor,
+	states workflow.Repository,
+	idempotencyStore idempotency.Store,
+	recorder intlog.Recorder,
+	logger *slog.Logger,
+) (*worker.Worker, error) {
+	easyecomClient, err := easyecom.NewClient(easyecom.Config{
+		BaseURL:     cfg.EasyEcom.BaseURL,
+		APIKey:      cfg.EasyEcom.APIKey,
+		JWTToken:    cfg.EasyEcom.JWTToken,
+		Email:       cfg.EasyEcom.Email,
+		Password:    cfg.EasyEcom.Password,
+		LocationKey: cfg.EasyEcom.LocationKey,
+		Timeout:     cfg.EasyEcom.Timeout,
+	}, easyecom.WithLogger(logger))
+	if err != nil {
+		return nil, fmt.Errorf("configure EasyEcom client (set WORKER_ENABLED=false for an intake-only instance): %w", err)
+	}
+	daburClient, err := dabur.NewClient(dabur.Config{
+		BaseURL:              cfg.Dabur.BaseURL,
+		Username:             cfg.Dabur.Username,
+		Password:             cfg.Dabur.Password,
+		ClientID:             cfg.Dabur.ClientID,
+		DefaultFacility:      cfg.Dabur.DefaultFacility,
+		Channel:              cfg.Dabur.Channel,
+		ShelfCode:            cfg.Dabur.ShelfCode,
+		VerificationRequired: cfg.Dabur.VerificationRequired,
+		Timeout:              cfg.Dabur.Timeout,
+	}, dabur.WithLogger(logger))
+	if err != nil {
+		return nil, fmt.Errorf("configure Dabur client (set WORKER_ENABLED=false for an intake-only instance): %w", err)
+	}
+
+	orderSync, err := ordersync.New(ordersync.Dependencies{
+		Resolver:     routing.NewStore(pool),
+		Sources:      map[string]ordersync.Source{easyecom.PlatformName: easyecom.NewSource(easyecomClient, logger)},
+		Destinations: map[string]ordersync.Destination{dabur.PlatformName: dabur.NewDestination(daburClient, logger)},
+		Logger:       logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if err := registry.Register(orderSync, event.OrderCreated, event.OrderConfirmed); err != nil {
+		return nil, err
+	}
+
+	return worker.New(worker.Dependencies{
+		Queue:       jobQueue,
+		Registry:    registry,
+		Executor:    executor,
+		States:      states,
+		Idempotency: idempotencyStore,
+		Recorder:    recorder,
+		Logger:      logger,
+	}, worker.Config{
+		Concurrency:       cfg.Worker.Concurrency,
+		MaxAutoResumes:    cfg.Worker.MaxAutoResumes,
+		RecoveryInterval:  cfg.Worker.RecoveryInterval,
+		StaleRunningAfter: cfg.Worker.StaleRunningAfter,
+		RetryFailedAfter:  cfg.Worker.RetryFailedAfter,
+	})
 }
