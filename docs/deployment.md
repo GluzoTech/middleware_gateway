@@ -44,7 +44,16 @@ go run ./cmd/server
 ```
 
 The server needs reachable PostgreSQL and Redis instances and exits with a
-clear error if either is unavailable at startup.
+clear error if either is unavailable at startup. Pending schema migrations
+are applied automatically before the server starts listening; the same
+migrations can be applied ahead of a deploy with:
+
+```bash
+go run ./cmd/gatewayctl migrate
+```
+
+Platforms, integrations and credentials are provisioned with `gatewayctl`;
+see [authentication.md](authentication.md).
 
 ## Docker Compose
 
@@ -78,5 +87,8 @@ go vet ./...
 go test ./...
 ```
 
-Tests that need live infrastructure are skipped unless `TEST_DATABASE_URL` and
-`TEST_REDIS_URL` are set.
+The `tests` package runs against a real PostgreSQL: it uses `TEST_DATABASE_URL`
+when set and otherwise starts an embedded PostgreSQL 16, downloading its
+binaries once into `~/.embedded-postgres-go`. Use `go test -short ./...` to
+skip it. Per-package tests that need live infrastructure are skipped unless
+`TEST_DATABASE_URL` and `TEST_REDIS_URL` are set.

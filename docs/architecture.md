@@ -63,7 +63,9 @@ model only.
 | `app/database/postgres` | PostgreSQL connection pool | 1 |
 | `app/database/redisconn` | Redis client | 1 |
 | `app/database/migrations` | Versioned SQL migration runner | 1 |
-| `app/auth` | Platform API keys and integration access tokens | 2 |
+| `app/auth` | Platform API keys and integration access tokens: verifiers, middleware, PostgreSQL and in-memory stores | 2 |
+| `cmd/gatewayctl` | Operator CLI: migrations, platforms, integrations, tokens | 2 |
+| `tests` | Integration tests against a real PostgreSQL (embedded, or `TEST_DATABASE_URL`) | 2 |
 | `app/integrations/easyecom` | EasyEcom client, DTOs, endpoints, mappers | 3 |
 | `app/domain` | Gluzo domain models (order, inventory, tracking) | 4 |
 | `app/routing` | Database-backed integration routing | 5 |
@@ -132,3 +134,22 @@ JSONL files serve well with 30-day retention by directory deletion. Workflow
 state is small and per-correlation-ID, so atomic file writes are sufficient
 initially; the repository sits behind an interface so it can move to a database
 without touching workflow logic.
+
+### ADR-007: Credentials are stored as SHA-256 digests and bound to a platform
+
+Platform API keys and integration access tokens are 256-bit random values.
+Only their SHA-256 digest is stored, so a database leak yields nothing usable,
+and a fast hash is correct for high-entropy secrets (slow password hashes
+protect low-entropy passwords). Tokens belong to exactly one integration,
+carry an optional expiry and can be revoked; after both tiers verify, the
+token's integration must belong to the platform that presented the key. This
+keeps the tiers independently checkable while preventing a token from being
+replayed through another platform's key. See [authentication.md](authentication.md).
+
+### ADR-008: Integration tests run against a real, embedded PostgreSQL
+
+SQL that is only exercised by mocks is unverified SQL. The `tests` package
+starts an embedded PostgreSQL 16 (binaries cached after the first download)
+or uses `TEST_DATABASE_URL`, applies the real migrations, and drives the
+stores through their public APIs. Unit tests elsewhere use in-memory
+verifiers and stay hermetic; `go test -short ./...` skips the embedded suite.
