@@ -17,7 +17,8 @@ func BodyLimit(maxBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if c.Request.ContentLength > maxBytes {
 			c.AbortWithStatusJSON(http.StatusRequestEntityTooLarge, gin.H{
-				"error":          "request body too large",
+				"error":          "request entity too large",
+				"reason":         "request body too large",
 				"correlation_id": CorrelationID(c),
 			})
 			return

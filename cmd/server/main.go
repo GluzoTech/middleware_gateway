@@ -10,13 +10,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/config"
 	"github.com/gluzo/integration-gateway/app/database/migrations"
 	"github.com/gluzo/integration-gateway/app/database/postgres"
 	"github.com/gluzo/integration-gateway/app/database/redisconn"
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpserver"
+	"github.com/gluzo/integration-gateway/app/idempotency"
+	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
 	"github.com/gluzo/integration-gateway/app/logging"
+	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
+	"github.com/gluzo/integration-gateway/app/webhook"
 )
 
 // version is stamped at build time via -ldflags "-X main.version=...".
@@ -75,6 +80,23 @@ func run() error {
 	defer func() { _ = rdb.Close() }()
 	logger.Info("redis connected")
 
+	jobQueue, err := redisqueue.New(rdb, redisqueue.Options{
+		Stream:        cfg.Queue.Stream,
+		Group:         cfg.Queue.Group,
+		BatchSize:     int64(cfg.Queue.BatchSize),
+		BlockTimeout:  cfg.Queue.BlockTimeout,
+		ClaimMinIdle:  cfg.Queue.ClaimMinIdle,
+		MaxDeliveries: cfg.Queue.MaxDeliveries,
+		MaxLen:        cfg.Queue.MaxLen,
+	}, logger)
+	if err != nil {
+		return err
+	}
+
+	credentials := auth.NewStore(pool)
+	idempotencyStore := idempotency.NewPostgresStore(pool)
+	easyecomWebhook := webhook.NewHandler(easyecom.WebhookParser{}, idempotencyStore, jobQueue, logger)
+
 	healthHandler := health.NewHandler(config.ServiceName, version, readinessTimeout, logger,
 		postgres.Checker{Pool: pool},
 		redisconn.Checker{Client: rdb},
@@ -84,6 +106,9 @@ func run() error {
 		Logger:       logger,
 		Health:       healthHandler,
 		MaxBodyBytes: cfg.HTTP.MaxBodyBytes,
+		PlatformKeys: credentials,
+		AccessTokens: credentials,
+		Webhooks:     []*webhook.Handler{easyecomWebhook},
 	})
 	srv := httpserver.New(cfg.App.Port, cfg.HTTP, router)
 

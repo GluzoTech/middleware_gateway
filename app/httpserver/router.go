@@ -8,16 +8,24 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpserver/middleware"
+	"github.com/gluzo/integration-gateway/app/webhook"
 )
 
-// Dependencies lists everything the router needs. Handlers for later phases
-// (webhooks, admin log viewer) are added here as optional fields.
+// Dependencies lists everything the router needs. Optional handlers are
+// mounted only when supplied.
 type Dependencies struct {
 	Logger       *slog.Logger
 	Health       *health.Handler
 	MaxBodyBytes int64
+
+	// Webhook intake. Each handler is mounted at /webhooks/<platform> and
+	// /webhooks/<platform>/:event behind both authentication tiers.
+	PlatformKeys auth.PlatformKeyVerifier
+	AccessTokens auth.AccessTokenVerifier
+	Webhooks     []*webhook.Handler
 }
 
 // NewRouter builds the HTTP routing table with the shared middleware chain.
@@ -45,6 +53,16 @@ func NewRouter(deps Dependencies) *gin.Engine {
 
 	r.GET("/health", deps.Health.Live)
 	r.GET("/ready", deps.Health.Ready)
+
+	for _, h := range deps.Webhooks {
+		group := r.Group("/webhooks/"+h.Platform(),
+			auth.AcceptCombinedCredential(auth.CombinedCredentialHeader),
+			auth.RequirePlatformKey(deps.PlatformKeys, deps.Logger),
+			auth.RequireAccessToken(deps.AccessTokens, deps.Logger),
+		)
+		group.POST("", h.Handle)
+		group.POST("/:event", h.Handle)
+	}
 
 	r.NoRoute(func(c *gin.Context) {
 		c.JSON(http.StatusNotFound, gin.H{"error": "not found", "correlation_id": middleware.CorrelationID(c)})
