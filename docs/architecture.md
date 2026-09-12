@@ -146,6 +146,28 @@ token's integration must belong to the platform that presented the key. This
 keeps the tiers independently checkable while preventing a token from being
 replayed through another platform's key. See [authentication.md](authentication.md).
 
+### ADR-009: Single-header credential carrier for EasyEcom webhooks
+
+EasyEcom attaches exactly one header, `Access-Token`, to its webhook calls,
+while the gateway requires a platform key and an integration token. Rather
+than weaken the two-tier model or require a proxy to inject headers, the
+webhook handler accepts `Access-Token: <platform key>:<integration token>`
+and splits it into the two credentials before the normal middleware chain
+runs. Each credential is still verified independently and the
+platform/integration binding check still applies; the operator configures
+the joined value once in EasyEcom. Native `X-API-Key` and `Authorization`
+headers keep working for platforms that can send them.
+
+### ADR-010: External contracts are grounded in documentation or flagged
+
+No API path or field is invented. Where public documentation was readable
+(Uniware) the DTOs follow it exactly. Where it was not (EasyEcom's reference
+site is browser-rendered) the DTOs follow EasyEcom's support documentation
+and observed public payloads, and every unconfirmed name carries a `VERIFY`
+or `TODO(VERIFY)` marker listed in [integrations.md](integrations.md). The
+client, retry and mapping logic are independent of the exact names, so
+confirming a field is a one-line change.
+
 ### ADR-008: Integration tests run against a real, embedded PostgreSQL
 
 SQL that is only exercised by mocks is unverified SQL. The `tests` package
