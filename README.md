@@ -37,15 +37,34 @@ Each secret is printed once. See [docs/authentication.md](docs/authentication.md
 ```bash
 gofmt -l .
 go vet ./...
-go test ./...          # includes integration tests on an embedded PostgreSQL
+go test ./...          # includes integration and end-to-end tests on an embedded PostgreSQL
 go test -short ./...   # unit tests only
+```
+
+The end-to-end test in `tests/` runs the full production scenario: a
+duplicated EasyEcom webhook is accepted once, the worker routes, fetches,
+maps and pushes the order to a fake Uniware, the destination outage exhausts
+the action's retries, a simulated restart resumes the run from the failed
+action to completion, the trace is served by the admin viewer, and retention
+prunes old logs.
+
+## Operate
+
+```bash
+# search the execution log and view a timeline
+curl -H "Authorization: Bearer $ADMIN_LOG_VIEWER_TOKEN" "http://localhost:8080/admin/logs/search?external_order_id=9876543"
+curl -H "Authorization: Bearer $ADMIN_LOG_VIEWER_TOKEN" "http://localhost:8080/admin/logs/INT-…?format=json"
+
+# resume a failed run from its failed action
+curl -X POST -H "Authorization: Bearer $ADMIN_LOG_VIEWER_TOKEN" "http://localhost:8080/admin/workflows/INT-…/resume"
 ```
 
 ## Layout
 
 ```text
 cmd/server        process entry point
-cmd/gatewayctl    operator CLI (migrations, platforms, integrations, tokens)
+cmd/gatewayctl    operator CLI (migrations, platforms, integrations, tokens, routes)
+app/admin         protected log viewer and resume endpoint
 app/apperror      error categories and retry semantics
 app/auth          two-tier authentication (platform key + integration token)
 app/config        environment configuration
@@ -58,7 +77,7 @@ app/httpclient    resilient HTTP client for external APIs
 app/httpserver    router, middleware, hardened HTTP server
 app/idempotency   duplicate-event protection
 app/integrations  platform adapters (EasyEcom source, Dabur/Uniware destination)
-app/intlog        integration execution log contract
+app/intlog        append-only JSONL execution log, sanitiser, reader, retention
 app/logging       structured application logger
 app/queue         job queue (in-memory and Redis Streams)
 app/routing       database-backed integration routing
@@ -80,5 +99,6 @@ storage/          runtime logs and workflow state (not committed)
 - [Routing](docs/routing.md)
 - [Workflow engine](docs/workflow-engine.md)
 - [Retry strategy](docs/retry-strategy.md)
+- [Logging and the admin viewer](docs/logging.md)
 - [Integrations](docs/integrations.md)
 - [Deployment](docs/deployment.md)

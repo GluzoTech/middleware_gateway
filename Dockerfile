@@ -13,7 +13,9 @@ COPY . .
 ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath \
     -ldflags="-s -w -X main.version=${VERSION}" \
-    -o /out/server ./cmd/server
+    -o /out/server ./cmd/server \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" \
+    -o /out/gatewayctl ./cmd/gatewayctl
 
 # Runtime data directories, owned by the unprivileged runtime user.
 RUN mkdir -p /out/storage/logs /out/storage/workflows
@@ -24,6 +26,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 
 COPY --from=build /out/server /app/server
+COPY --from=build /out/gatewayctl /app/gatewayctl
 COPY --from=build --chown=nonroot:nonroot /out/storage /app/storage
 
 ENV APP_PORT=8080 \

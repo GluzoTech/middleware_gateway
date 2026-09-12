@@ -26,3 +26,6 @@ coverage.out
 *~
 .DS_Store
 Thumbs.db
+
+# IDE tooling output
+git-history/

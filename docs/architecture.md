@@ -68,7 +68,9 @@ model only.
 | `tests` | Integration tests against a real PostgreSQL (embedded, or `TEST_DATABASE_URL`) | 2 |
 | `app/apperror` | Error categories, retry semantics, HTTP status classification, serialisable snapshots | 3 |
 | `app/event` | Platform-neutral event model shared by intake, queue and workflows | 3 |
-| `app/intlog` | Integration execution log schema and recorder contract | 3 |
+| `app/intlog` | Integration execution log: schema, recorder contract, JSONL writer, sanitiser, reader, retention | 3, 10 |
+| `app/admin` | Protected log viewer: search, timeline, workflow state, resume | 11 |
+| `tests` (e2e) | The definition-of-done scenario against embedded PostgreSQL, miniredis and fake EasyEcom/Uniware servers | 12 |
 | `app/httpclient` | Resilient HTTP foundation: timeouts, backoff with jitter, Retry-After, size limits | 3 |
 | `app/integrations/easyecom` | EasyEcom client, DTOs, endpoints, mappers, webhook parser | 3 |
 | `app/domain` | Gluzo domain models (order, inventory, tracking) | 3 |
@@ -81,8 +83,6 @@ model only.
 | `app/worker` | Queue consumer, recovery of interrupted and transiently failed runs, manual resume | 7 |
 | `app/integrations/dabur` | Dabur/Uniware OAuth client, DTOs, endpoints, mappers, destination adapter | 8 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
-| `app/logging` (integration logger) | Append-only JSONL execution logs, sanitiser, retention | 10 |
-| `app/admin` | Protected log viewer | 11 |
 
 ## Boundaries that must hold
 
@@ -217,6 +217,27 @@ the retry budget because its outcome is unknown. Failed runs whose last
 error was transient are resumed automatically after a cooling period, up to
 `WORKER_MAX_AUTO_RESUMES`; permanent failures wait for an operator. Runs
 never restart from the first action.
+
+### ADR-015: The execution log is sanitised at the write boundary and read without an index
+
+Every entry passes through one sanitiser before it is appended: secret-like
+keys are redacted at any depth, credential fragments in free text are
+masked, and personal data is partially masked. Nothing upstream is trusted
+to have done this already, so a new adapter cannot leak a header by
+accident. The admin viewer reads the JSONL files directly, newest day first,
+and stops at a result limit; for one integration over 30 days that is fast
+enough, and an index can be introduced behind the same reader interface if
+volume grows. The log and the state are deliberately different artefacts:
+the log answers "what happened", the state answers "where are we now".
+
+### ADR-016: State files are replaced atomically, with a bounded retry on Windows
+
+State is written to a temporary file, fsynced and renamed over the previous
+version, so a crash mid-write cannot leave a torn file. On Windows a rename
+fails while another handle (the admin viewer reading the same file) is open,
+so the rename is retried for up to a second. A redelivered job for a run that
+is already executing in the same process waits for it instead of bouncing
+through the queue, which would otherwise consume the job's delivery budget.
 
 ### ADR-008: Integration tests run against a real, embedded PostgreSQL
 

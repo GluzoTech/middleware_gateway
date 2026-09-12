@@ -63,7 +63,9 @@ without them. Workflow state is stored on local disk under
 scale by adding instances behind the same Redis stream.
 | `LOG_DIRECTORY` | `./storage/logs` | Root of date-partitioned JSONL execution logs |
 | `WORKFLOW_DIRECTORY` | `./storage/workflows` | Root of workflow state files |
-| `LOG_RETENTION_DAYS` | `30` | Days of execution logs to keep |
+| `LOG_RETENTION_DAYS` | `30` | Days of execution logs, idempotency records and completed state to keep |
+| `LOG_RETENTION_INTERVAL` | `1h` | How often the retention job runs |
+| `ADMIN_LOG_VIEWER_TOKEN` | | Bearer token for `/admin/*`; empty disables the viewer |
 
 The process refuses to start if a required variable is missing or any value is
 malformed, and lists every problem in one message.
@@ -99,6 +101,13 @@ Compose starts PostgreSQL, Redis and the gateway. Service addresses are set in
 `docker-compose.yml` and override anything in `.env`. Execution logs and
 workflow state live in the `gateway-storage` named volume so they survive
 container recreation.
+
+## Admin log viewer
+
+Set `ADMIN_LOG_VIEWER_TOKEN` to a long random value and open
+`https://<host>/admin/logs` with `Authorization: Bearer <token>`. The viewer
+must sit behind TLS; never expose it without the token. See
+[logging.md](logging.md) for the routes and filters.
 
 ## Production notes
 
