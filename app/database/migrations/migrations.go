@@ -8,6 +8,7 @@ package migrations
 
 import (
 	"context"
+	"embed"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -17,6 +18,18 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+//go:embed sql/*.sql
+var embedded embed.FS
+
+// Files returns the migrations shipped with this build.
+func Files() fs.FS {
+	sub, err := fs.Sub(embedded, "sql")
+	if err != nil {
+		panic("migrations: embedded sql directory missing: " + err.Error())
+	}
+	return sub
+}
 
 // advisoryLockKey is an arbitrary application-wide constant; any process
 // holding it is the only one applying migrations.

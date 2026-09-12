@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/gluzo/integration-gateway/app/config"
+	"github.com/gluzo/integration-gateway/app/database/migrations"
 	"github.com/gluzo/integration-gateway/app/database/postgres"
 	"github.com/gluzo/integration-gateway/app/database/redisconn"
 	"github.com/gluzo/integration-gateway/app/health"
@@ -62,6 +63,10 @@ func run() error {
 	}
 	defer pool.Close()
 	logger.Info("postgres connected")
+
+	if err := migrations.Apply(ctx, pool, migrations.Files(), logger); err != nil {
+		return err
+	}
 
 	rdb, err := redisconn.Connect(ctx, cfg.Redis.URL, cfg.Redis.ConnectTimeout)
 	if err != nil {
