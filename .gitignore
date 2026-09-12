@@ -1,0 +1,28 @@
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Runtime data (never commit logs or workflow state)
+storage/logs/*
+!storage/logs/.gitkeep
+storage/workflows/*
+!storage/workflows/.gitkeep
+tmp/
+*.log
+
+# Build and test artifacts
+bin/
+dist/
+coverage.out
+*.test
+*.out
+*.prof
+
+# IDE and OS state
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+Thumbs.db
