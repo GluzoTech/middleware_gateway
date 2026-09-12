@@ -51,14 +51,17 @@ app/auth          two-tier authentication (platform key + integration token)
 app/config        environment configuration
 app/correlation   correlation ID propagation
 app/domain        order, inventory and tracking domain models
+app/event         platform-neutral event model
 app/database      PostgreSQL pool, Redis client, migration runner
 app/health        liveness and readiness endpoints
 app/httpclient    resilient HTTP client for external APIs
 app/httpserver    router, middleware, hardened HTTP server
 app/idempotency   duplicate-event protection
 app/integrations  platform adapters (EasyEcom today; Dabur next)
+app/intlog        integration execution log contract
 app/logging       structured application logger
 app/queue         job queue (in-memory and Redis Streams)
+app/routing       database-backed integration routing
 app/webhook       webhook intake
 tests/            integration tests against a real PostgreSQL
 docs/             architecture and operational documentation
@@ -71,5 +74,6 @@ storage/          runtime logs and workflow state (not committed)
 - [Authentication](docs/authentication.md)
 - [Webhook flow](docs/webhook-flow.md)
 - [Idempotency](docs/idempotency.md)
+- [Routing](docs/routing.md)
 - [Integrations](docs/integrations.md)
 - [Deployment](docs/deployment.md)

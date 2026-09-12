@@ -66,14 +66,16 @@ model only.
 | `app/auth` | Platform API keys and integration access tokens: verifiers, middleware, PostgreSQL and in-memory stores | 2 |
 | `cmd/gatewayctl` | Operator CLI: migrations, platforms, integrations, tokens | 2 |
 | `tests` | Integration tests against a real PostgreSQL (embedded, or `TEST_DATABASE_URL`) | 2 |
-| `app/apperror` | Error categories, retry semantics, HTTP status classification | 3 |
+| `app/apperror` | Error categories, retry semantics, HTTP status classification, serialisable snapshots | 3 |
+| `app/event` | Platform-neutral event model shared by intake, queue and workflows | 3 |
+| `app/intlog` | Integration execution log schema and recorder contract | 3 |
 | `app/httpclient` | Resilient HTTP foundation: timeouts, backoff with jitter, Retry-After, size limits | 3 |
 | `app/integrations/easyecom` | EasyEcom client, DTOs, endpoints, mappers, webhook parser | 3 |
 | `app/domain` | Gluzo domain models (order, inventory, tracking) | 3 |
 | `app/idempotency` | Duplicate-event protection (PostgreSQL and in-memory stores) | 3 |
 | `app/queue` | Job model, Publisher/Consumer contracts, in-memory queue; `redisqueue` on Redis Streams | 3 |
 | `app/webhook` | Platform-neutral event model, validation, intake handler | 3 |
-| `app/routing` | Database-backed integration routing | 5 |
+| `app/routing` | Database-backed integration routing scoped to the authenticated integration | 5 |
 | `app/workflow` | Workflow engine, state, actions, registry | 6 |
 | `app/integrations/dabur` | Dabur/Uniware client, DTOs, endpoints, mappers | 8 |
 | `app/workflow_state` | Atomic file-based workflow state repository | 9 |
