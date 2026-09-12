@@ -1,0 +1,53 @@
+{
+  "code": 200,
+  "message": "Successful",
+  "data": [
+    {
+      "invoice_id": "INV-1001",
+      "order_id": 9876543,
+      "reference_code": "AMZ-403-1234567",
+      "company_name": "Gluzo Retail",
+      "warehouse_id": 12345,
+      "order_status": "Pending",
+      "order_status_id": 1,
+      "order_date": "2026-09-12 10:30:01",
+      "marketplace": "Amazon",
+      "marketplace_id": 3,
+      "customer_name": "Asha Verma",
+      "contact_num": "9876501234",
+      "email": "asha@example.com",
+      "address_line_1": "12 MG Road",
+      "address_line_2": "Near Station",
+      "city": "Pune",
+      "state": "Maharashtra",
+      "pin_code": 411001,
+      "country": "India",
+      "total_amount": "1499.50",
+      "payment_mode": "COD",
+      "order_items": [
+        {
+          "suborder_id": 555001,
+          "sku": "DAB-CHY-500",
+          "product_id": 777,
+          "product_name": "Dabur Chyawanprash 500g",
+          "suborder_quantity": "2",
+          "tax_rate": "18",
+          "tax_type": "GST",
+          "selling_price": 499.75,
+          "shipment_type": "Standard"
+        },
+        {
+          "suborder_id": 555002,
+          "sku": "DAB-HNY-250",
+          "product_id": 778,
+          "product_name": "Dabur Honey 250g",
+          "suborder_quantity": 1,
+          "tax_rate": 5,
+          "tax_type": "GST",
+          "selling_price": "500.00",
+          "shipment_type": "Standard"
+        }
+      ]
+    }
+  ]
+}

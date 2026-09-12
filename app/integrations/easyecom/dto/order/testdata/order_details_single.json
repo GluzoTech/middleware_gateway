@@ -1,0 +1,32 @@
+{
+  "code": 200,
+  "message": "Successful",
+  "data": {
+    "invoice_id": "INV-3001",
+    "order_id": 3334445,
+    "reference_code": "MYN-5001",
+    "warehouse_id": 12345,
+    "order_status": "Pending",
+    "order_status_id": 1,
+    "customer_name": "Priya Nair",
+    "contact_num": "9000011111",
+    "address_line_1": "1 Beach Road",
+    "city": "Chennai",
+    "state": "Tamil Nadu",
+    "pin_code": "600001",
+    "total_amount": 99,
+    "payment_mode": "COD",
+    "order_items": [
+      {
+        "suborder_id": 7001,
+        "sku": "DAB-AML-200",
+        "product_id": 780,
+        "suborder_quantity": 1,
+        "tax_rate": 12,
+        "tax_type": "GST",
+        "selling_price": 99,
+        "shipment_type": "Standard"
+      }
+    ]
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "code": 200,
+  "message": "Successful",
+  "data": {
+    "orders": [
+      {
+        "invoice_id": "INV-2001",
+        "order_id": "1112223",
+        "reference_code": "FLP-9001",
+        "warehouse_id": "12345",
+        "order_status": "Confirmed",
+        "order_status_id": "2",
+        "customer_name": "Rahul Mehta",
+        "contact_num": 9998887776,
+        "address_line_1": "5 Park Street",
+        "city": "Kolkata",
+        "state": "West Bengal",
+        "pin_code": "700016",
+        "total_amount": 250,
+        "payment_mode": "Prepaid",
+        "suborders": [
+          {
+            "suborder_id": "6001",
+            "sku": "DAB-HNY-250",
+            "product_id": "778",
+            "suborder_quantity": 1,
+            "tax_rate": 5,
+            "tax_type": "GST",
+            "selling_price": 250,
+            "shipment_type": "Standard"
+          }
+        ]
+      },
+      {
+        "invoice_id": "INV-2002",
+        "order_id": "1112224",
+        "reference_code": "FLP-9002",
+        "warehouse_id": "67890",
+        "order_status": "Pending",
+        "order_status_id": "1",
+        "customer_name": "Neha Singh",
+        "contact_num": "9998887000",
+        "address_line_1": "9 Lake View",
+        "city": "Bengaluru",
+        "state": "Karnataka",
+        "pin_code": "560001",
+        "total_amount": 120,
+        "payment_mode": "COD",
+        "suborders": [
+          {
+            "suborder_id": "6002",
+            "sku": "DAB-RED-100",
+            "product_id": "779",
+            "suborder_quantity": 1,
+            "tax_rate": 12,
+            "tax_type": "GST",
+            "selling_price": 120,
+            "shipment_type": "Standard"
+          }
+        ]
+      }
+    ],
+    "nextUrl": "https://api.easyecom.io/orders/getAllOrders?page=2"
+  }
+}

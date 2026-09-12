@@ -31,6 +31,22 @@ type Config struct {
 	Database Database
 	Redis    Redis
 	Storage  Storage
+	EasyEcom EasyEcom
+}
+
+// EasyEcom holds credentials for outbound EasyEcom API calls. Every call
+// carries the account API key; the JWT is either supplied directly or
+// obtained by logging in with email, password and location key. Presence of
+// credentials is validated when the EasyEcom client is built, so a process
+// that only receives webhooks can start without them.
+type EasyEcom struct {
+	BaseURL     string
+	APIKey      string
+	JWTToken    string
+	Email       string
+	Password    string
+	LocationKey string
+	Timeout     time.Duration
 }
 
 // App holds process-level settings.
@@ -116,6 +132,15 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			WorkflowDirectory: r.str("WORKFLOW_DIRECTORY", "./storage/workflows"),
 			LogRetentionDays:  r.int("LOG_RETENTION_DAYS", 30),
 		},
+		EasyEcom: EasyEcom{
+			BaseURL:     r.str("EASYECOM_BASE_URL", "https://api.easyecom.io"),
+			APIKey:      r.str("EASYECOM_API_KEY", ""),
+			JWTToken:    r.str("EASYECOM_JWT_TOKEN", ""),
+			Email:       r.str("EASYECOM_EMAIL", ""),
+			Password:    r.str("EASYECOM_PASSWORD", ""),
+			LocationKey: r.str("EASYECOM_LOCATION_KEY", ""),
+			Timeout:     r.duration("EASYECOM_TIMEOUT", 15*time.Second),
+		},
 	}
 
 	if err := r.err(); err != nil {
@@ -172,6 +197,7 @@ func (c *Config) Validate() error {
 		{"HTTP_IDLE_TIMEOUT", c.HTTP.IdleTimeout},
 		{"DATABASE_CONNECT_TIMEOUT", c.Database.ConnectTimeout},
 		{"REDIS_CONNECT_TIMEOUT", c.Redis.ConnectTimeout},
+		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
 	}
 	for _, d := range durations {
 		if d.value <= 0 {

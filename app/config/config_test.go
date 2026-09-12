@@ -60,7 +60,31 @@ func TestLoadFrom(t *testing.T) {
 				if cfg.App.IsProduction() {
 					t.Error("development config reported as production")
 				}
+				if cfg.EasyEcom.BaseURL != "https://api.easyecom.io" || cfg.EasyEcom.Timeout != 15*time.Second {
+					t.Errorf("easyecom defaults = %+v", cfg.EasyEcom)
+				}
 			},
+		},
+		{
+			name: "easyecom credentials are read",
+			env: merge(base, map[string]string{
+				"EASYECOM_API_KEY":      "key",
+				"EASYECOM_EMAIL":        "ops@example.com",
+				"EASYECOM_PASSWORD":     "pw",
+				"EASYECOM_LOCATION_KEY": "loc",
+				"EASYECOM_TIMEOUT":      "3s",
+			}),
+			check: func(t *testing.T, cfg *config.Config) {
+				e := cfg.EasyEcom
+				if e.APIKey != "key" || e.Email != "ops@example.com" || e.Password != "pw" || e.LocationKey != "loc" || e.Timeout != 3*time.Second {
+					t.Errorf("easyecom config = %+v", e)
+				}
+			},
+		},
+		{
+			name:    "easyecom timeout must be positive",
+			env:     merge(base, map[string]string{"EASYECOM_TIMEOUT": "0s"}),
+			wantErr: "EASYECOM_TIMEOUT must be a positive duration",
 		},
 		{
 			name: "explicit values override defaults",
