@@ -29,6 +29,18 @@ secret manager. Never commit `.env`.
 | `DATABASE_CONNECT_TIMEOUT` | `5s` | Connect and startup ping deadline |
 | `REDIS_URL` | required | `redis://` or `rediss://` URL |
 | `REDIS_CONNECT_TIMEOUT` | `5s` | Dial and startup ping deadline |
+| `QUEUE_STREAM` | `gluzo:jobs` | Redis stream holding queued jobs |
+| `QUEUE_GROUP` | `gateway-workers` | Consumer group name |
+| `QUEUE_BATCH_SIZE` | `10` | Jobs fetched per read |
+| `QUEUE_BLOCK_TIMEOUT` | `5s` | How long a read waits for new jobs |
+| `QUEUE_CLAIM_MIN_IDLE` | `60s` | Unacknowledged jobs older than this are reclaimed from dead workers |
+| `QUEUE_MAX_DELIVERIES` | `5` | Deliveries before a job is dead-lettered to `<stream>:dead` |
+| `QUEUE_MAX_LEN` | `100000` | Approximate cap on stream length |
+| `EASYECOM_BASE_URL` | `https://api.easyecom.io` | EasyEcom API host |
+| `EASYECOM_API_KEY` | | Account API key sent as `X-API-Key` |
+| `EASYECOM_JWT_TOKEN` | | Pre-issued JWT (alternative to login) |
+| `EASYECOM_EMAIL`, `EASYECOM_PASSWORD`, `EASYECOM_LOCATION_KEY` | | Login credentials used to obtain a JWT |
+| `EASYECOM_TIMEOUT` | `15s` | Per-attempt timeout for EasyEcom calls |
 | `LOG_DIRECTORY` | `./storage/logs` | Root of date-partitioned JSONL execution logs |
 | `WORKFLOW_DIRECTORY` | `./storage/workflows` | Root of workflow state files |
 | `LOG_RETENTION_DAYS` | `30` | Days of execution logs to keep |

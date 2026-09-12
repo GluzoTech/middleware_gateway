@@ -66,11 +66,15 @@ model only.
 | `app/auth` | Platform API keys and integration access tokens: verifiers, middleware, PostgreSQL and in-memory stores | 2 |
 | `cmd/gatewayctl` | Operator CLI: migrations, platforms, integrations, tokens | 2 |
 | `tests` | Integration tests against a real PostgreSQL (embedded, or `TEST_DATABASE_URL`) | 2 |
-| `app/integrations/easyecom` | EasyEcom client, DTOs, endpoints, mappers | 3 |
-| `app/domain` | Gluzo domain models (order, inventory, tracking) | 4 |
+| `app/apperror` | Error categories, retry semantics, HTTP status classification | 3 |
+| `app/httpclient` | Resilient HTTP foundation: timeouts, backoff with jitter, Retry-After, size limits | 3 |
+| `app/integrations/easyecom` | EasyEcom client, DTOs, endpoints, mappers, webhook parser | 3 |
+| `app/domain` | Gluzo domain models (order, inventory, tracking) | 3 |
+| `app/idempotency` | Duplicate-event protection (PostgreSQL and in-memory stores) | 3 |
+| `app/queue` | Job model, Publisher/Consumer contracts, in-memory queue; `redisqueue` on Redis Streams | 3 |
+| `app/webhook` | Platform-neutral event model, validation, intake handler | 3 |
 | `app/routing` | Database-backed integration routing | 5 |
 | `app/workflow` | Workflow engine, state, actions, registry | 6 |
-| `app/queue` | Queue abstraction and Redis implementation | 7 |
 | `app/integrations/dabur` | Dabur/Uniware client, DTOs, endpoints, mappers | 8 |
 | `app/workflow_state` | Atomic file-based workflow state repository | 9 |
 | `app/logging` (integration logger) | Append-only JSONL execution logs, sanitiser, retention | 10 |
@@ -167,6 +171,26 @@ and observed public payloads, and every unconfirmed name carries a `VERIFY`
 or `TODO(VERIFY)` marker listed in [integrations.md](integrations.md). The
 client, retry and mapping logic are independent of the exact names, so
 confirming a field is a one-line change.
+
+### ADR-011: Redis Streams with a consumer group as the job queue
+
+A list-based queue loses a job when the worker holding it dies. A stream
+with a consumer group keeps every delivered job in a pending list until it
+is acknowledged, lets a surviving worker reclaim jobs idle longer than
+`QUEUE_CLAIM_MIN_IDLE`, and gives each job a delivery count so a poison job
+is moved to `<stream>:dead` after `QUEUE_MAX_DELIVERIES` instead of looping.
+The consumer group is created from the beginning of the stream, so events
+accepted before the first worker started are not skipped. The queue package
+exposes `Job`, `Publisher` and `Consumer` only; nothing about streams leaks
+into the workflow engine.
+
+### ADR-012: The webhook handler answers 2xx for anything well-formed
+
+EasyEcom counts every 4xx/5xx as a failed delivery, retries with growing
+delays and disables the trigger after enough failures. So duplicates,
+batches containing already-seen orders and empty payloads are all
+acknowledged with 200/202; only malformed or unauthenticated requests are
+rejected, and infrastructure outages return 503 so the retry is useful.
 
 ### ADR-008: Integration tests run against a real, embedded PostgreSQL
 

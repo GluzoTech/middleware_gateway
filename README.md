@@ -46,13 +46,20 @@ go test -short ./...   # unit tests only
 ```text
 cmd/server        process entry point
 cmd/gatewayctl    operator CLI (migrations, platforms, integrations, tokens)
+app/apperror      error categories and retry semantics
 app/auth          two-tier authentication (platform key + integration token)
 app/config        environment configuration
-app/logging       structured application logger
 app/correlation   correlation ID propagation
-app/httpserver    router, middleware, hardened HTTP server
-app/health        liveness and readiness endpoints
+app/domain        order, inventory and tracking domain models
 app/database      PostgreSQL pool, Redis client, migration runner
+app/health        liveness and readiness endpoints
+app/httpclient    resilient HTTP client for external APIs
+app/httpserver    router, middleware, hardened HTTP server
+app/idempotency   duplicate-event protection
+app/integrations  platform adapters (EasyEcom today; Dabur next)
+app/logging       structured application logger
+app/queue         job queue (in-memory and Redis Streams)
+app/webhook       webhook intake
 tests/            integration tests against a real PostgreSQL
 docs/             architecture and operational documentation
 storage/          runtime logs and workflow state (not committed)
@@ -62,4 +69,7 @@ storage/          runtime logs and workflow state (not committed)
 
 - [Architecture](docs/architecture.md)
 - [Authentication](docs/authentication.md)
+- [Webhook flow](docs/webhook-flow.md)
+- [Idempotency](docs/idempotency.md)
+- [Integrations](docs/integrations.md)
 - [Deployment](docs/deployment.md)
