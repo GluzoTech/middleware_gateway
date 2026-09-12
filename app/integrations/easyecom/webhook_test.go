@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"github.com/gluzo/integration-gateway/app/apperror"
+	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
-	"github.com/gluzo/integration-gateway/app/webhook"
 )
 
 func TestWebhookParserOrderEvents(t *testing.T) {
@@ -25,28 +25,28 @@ func TestWebhookParserOrderEvents(t *testing.T) {
 	}{
 		{
 			name:      "v2 array with two orders",
-			eventType: webhook.EventOrderCreated,
+			eventType: event.OrderCreated,
 			body:      `[{"order_id":101,"invoice_id":"INV-1","reference_code":"R1","warehouse_id":5,"extra":"kept"},{"order_id":"102","warehouse_id":"6"}]`,
 			wantIDs:   []string{"101", "102"},
 			wantKeys:  []string{"easyecom:ORDER_CREATED:101", "easyecom:ORDER_CREATED:102"},
 		},
 		{
 			name:      "v1 wrapped",
-			eventType: webhook.EventOrderConfirmed,
+			eventType: event.OrderConfirmed,
 			body:      `{"orders":[{"order_id":7,"warehouse_id":1}],"nextUrl":""}`,
 			wantIDs:   []string{"7"},
 			wantKeys:  []string{"easyecom:ORDER_CONFIRMED:7"},
 		},
 		{
 			name:      "single object falls back to invoice id",
-			eventType: webhook.EventOrderCancelled,
+			eventType: event.OrderCancelled,
 			body:      `{"order_id":"","invoice_id":"INV-9","warehouse_id":3}`,
 			wantIDs:   []string{"INV-9"},
 			wantKeys:  []string{"easyecom:ORDER_CANCELLED:INV-9"},
 		},
 		{
 			name:      "empty array",
-			eventType: webhook.EventOrderCreated,
+			eventType: event.OrderCreated,
 			body:      `[]`,
 		},
 	}
@@ -75,7 +75,7 @@ func TestWebhookParserOrderEvents(t *testing.T) {
 }
 
 func TestWebhookParserPreservesUnknownFieldsInPayload(t *testing.T) {
-	events, err := easyecom.WebhookParser{}.Parse(webhook.EventOrderCreated, []byte(`[{"order_id":1,"warehouse_id":2,"undocumented_field":"kept"}]`))
+	events, err := easyecom.WebhookParser{}.Parse(event.OrderCreated, []byte(`[{"order_id":1,"warehouse_id":2,"undocumented_field":"kept"}]`))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
 	}
@@ -95,15 +95,15 @@ func TestWebhookParserRejections(t *testing.T) {
 		want      string
 	}{
 		{"unknown event", "SOMETHING", `[]`, "unknown event type"},
-		{"unsupported event", webhook.EventInventoryUpdated, `{}`, "not supported"},
-		{"empty body", webhook.EventOrderCreated, ``, "empty body"},
-		{"scalar body", webhook.EventOrderCreated, `42`, "must be a JSON array or object"},
-		{"array of scalars", webhook.EventOrderCreated, `[1]`, "not an object"},
-		{"object without orders", webhook.EventOrderCreated, `{"hello":"world"}`, "neither orders nor order_id"},
-		{"malformed json", webhook.EventOrderCreated, `[{"order_id":1,`, "not an EasyEcom order webhook"},
-		{"missing identifiers", webhook.EventOrderCreated, `[{"warehouse_id":1}]`, "neither order_id nor invoice_id"},
-		{"missing warehouse", webhook.EventOrderCreated, `[{"order_id":1}]`, "no warehouse_id"},
-		{"bad field type", webhook.EventOrderCreated, `[{"order_id":{"x":1},"warehouse_id":1}]`, "order 0"},
+		{"unsupported event", event.InventoryUpdated, `{}`, "not supported"},
+		{"empty body", event.OrderCreated, ``, "empty body"},
+		{"scalar body", event.OrderCreated, `42`, "must be a JSON array or object"},
+		{"array of scalars", event.OrderCreated, `[1]`, "not an object"},
+		{"object without orders", event.OrderCreated, `{"hello":"world"}`, "neither orders nor order_id"},
+		{"malformed json", event.OrderCreated, `[{"order_id":1,`, "not an EasyEcom order webhook"},
+		{"missing identifiers", event.OrderCreated, `[{"warehouse_id":1}]`, "neither order_id nor invoice_id"},
+		{"missing warehouse", event.OrderCreated, `[{"order_id":1}]`, "no warehouse_id"},
+		{"bad field type", event.OrderCreated, `[{"order_id":{"x":1},"warehouse_id":1}]`, "order 0"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

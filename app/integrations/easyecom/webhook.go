@@ -7,9 +7,9 @@ import (
 	"strings"
 
 	"github.com/gluzo/integration-gateway/app/apperror"
+	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/idempotency"
 	dtoorder "github.com/gluzo/integration-gateway/app/integrations/easyecom/dto/order"
-	"github.com/gluzo/integration-gateway/app/webhook"
 )
 
 // RoutingKeyWarehouse is the routing attribute EasyEcom order events carry.
@@ -26,10 +26,10 @@ type WebhookParser struct{}
 func (WebhookParser) Platform() string { return PlatformName }
 
 // Parse implements webhook.Parser.
-func (WebhookParser) Parse(eventType string, body []byte) ([]webhook.Event, error) {
+func (WebhookParser) Parse(eventType string, body []byte) ([]event.Event, error) {
 	switch eventType {
-	case webhook.EventOrderCreated, webhook.EventOrderConfirmed, webhook.EventOrderCancelled:
-	case webhook.EventInventoryUpdated, webhook.EventTrackingUpdated:
+	case event.OrderCreated, event.OrderConfirmed, event.OrderCancelled:
+	case event.InventoryUpdated, event.TrackingUpdated:
 		// TODO(VERIFY): the Update Inventory and Tracking trigger payloads
 		// are not publicly documented. Do not configure these triggers in
 		// EasyEcom until their contracts are confirmed and workflows exist.
@@ -43,7 +43,7 @@ func (WebhookParser) Parse(eventType string, body []byte) ([]webhook.Event, erro
 		return nil, validationError("payload is not an EasyEcom order webhook: " + err.Error())
 	}
 
-	events := make([]webhook.Event, 0, len(objects))
+	events := make([]event.Event, 0, len(objects))
 	for i, raw := range objects {
 		var o dtoorder.Order
 		if err := json.Unmarshal(raw, &o); err != nil {
@@ -61,13 +61,13 @@ func (WebhookParser) Parse(eventType string, body []byte) ([]webhook.Event, erro
 			return nil, validationError(fmt.Sprintf("order %s has no warehouse_id", orderID))
 		}
 
-		events = append(events, webhook.Event{
+		events = append(events, event.Event{
 			Platform:        PlatformName,
 			EventType:       eventType,
 			ExternalOrderID: orderID,
 			ReferenceCode:   strings.TrimSpace(o.ReferenceCode.String()),
 			InvoiceNumber:   strings.TrimSpace(o.InvoiceID.String()),
-			RoutingKey:      webhook.RoutingKey{Type: RoutingKeyWarehouse, Value: warehouse},
+			RoutingKey:      event.RoutingKey{Type: RoutingKeyWarehouse, Value: warehouse},
 			IdempotencyKey:  idempotency.KeyFor(PlatformName, eventType, orderID),
 			Payload:         raw,
 		})

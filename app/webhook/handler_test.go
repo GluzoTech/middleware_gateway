@@ -17,9 +17,11 @@ import (
 
 	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/correlation"
+	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/httpserver/middleware"
 	"github.com/gluzo/integration-gateway/app/idempotency"
 	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
+	"github.com/gluzo/integration-gateway/app/intlog"
 	"github.com/gluzo/integration-gateway/app/queue"
 	"github.com/gluzo/integration-gateway/app/webhook"
 )
@@ -48,16 +50,27 @@ func (f failingStore) Claim(context.Context, idempotency.Record) (idempotency.Cl
 type env struct {
 	router   *gin.Engine
 	logs     *bytes.Buffer
+	recorder *intlog.Memory
 	queue    *queue.Memory
 	store    *idempotency.MemoryStore
 	integ    auth.Integration
 	platform auth.Platform
 }
 
-func newEnv(t *testing.T, opts ...func(*env, *webhook.Handler)) *env {
+type envOption func(*env) (idempotency.Store, queue.Publisher)
+
+func brokenQueue(e *env) (idempotency.Store, queue.Publisher) {
+	return e.store, failingPublisher{err: errors.New("redis down")}
+}
+
+func brokenStore(e *env) (idempotency.Store, queue.Publisher) {
+	return failingStore{err: errors.New("postgres down")}, e.queue
+}
+
+func newEnv(t *testing.T, opts ...envOption) *env {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
-	e := &env{logs: &bytes.Buffer{}, queue: queue.NewMemory(16), store: idempotency.NewMemoryStore()}
+	e := &env{logs: &bytes.Buffer{}, recorder: &intlog.Memory{}, queue: queue.NewMemory(16), store: idempotency.NewMemoryStore()}
 	logger := slog.New(slog.NewJSONHandler(e.logs, nil))
 
 	creds := auth.NewMemoryStore()
@@ -70,20 +83,12 @@ func newEnv(t *testing.T, opts ...func(*env, *webhook.Handler)) *env {
 	shopifyInteg := auth.Integration{ID: uuid.New(), Name: "shopify-dabur", SourcePlatformID: shopify.ID, Status: auth.StatusActive}
 	creds.AddToken(auth.Token{ID: uuid.New(), IntegrationID: shopifyInteg.ID}, shopifyInteg, otherToken)
 
-	handler := webhook.NewHandler(easyecom.WebhookParser{}, e.store, e.queue, logger)
-	var publisher queue.Publisher = e.queue
 	var store idempotency.Store = e.store
+	var publisher queue.Publisher = e.queue
 	for _, opt := range opts {
-		opt(e, handler)
+		store, publisher = opt(e)
 	}
-	if e.queue == nil {
-		publisher = failingPublisher{err: errors.New("redis down")}
-		handler = webhook.NewHandler(easyecom.WebhookParser{}, store, publisher, logger)
-	}
-	if e.store == nil {
-		store = failingStore{err: errors.New("postgres down")}
-		handler = webhook.NewHandler(easyecom.WebhookParser{}, store, publisher, logger)
-	}
+	handler := webhook.NewHandler(easyecom.WebhookParser{}, store, publisher, logger, webhook.WithRecorder(e.recorder))
 
 	r := gin.New()
 	r.Use(middleware.Correlation(), middleware.BodyLimit(1024))
@@ -152,10 +157,10 @@ func TestWebhookAcceptedAndQueued(t *testing.T) {
 	}
 
 	job := e.nextJob(t)
-	if job.CorrelationID != corr || job.EventType != webhook.EventOrderCreated || job.Platform != "easyecom" || job.IntegrationID != e.integ.ID.String() {
+	if job.CorrelationID != corr || job.EventType != event.OrderCreated || job.Platform != "easyecom" || job.IntegrationID != e.integ.ID.String() {
 		t.Fatalf("job = %+v", job)
 	}
-	var ev webhook.Event
+	var ev event.Event
 	if err := json.Unmarshal(job.Payload, &ev); err != nil {
 		t.Fatalf("job payload is not an event: %v", err)
 	}
@@ -165,6 +170,10 @@ func TestWebhookAcceptedAndQueued(t *testing.T) {
 	rec, err := e.store.Get(context.Background(), ev.IdempotencyKey)
 	if err != nil || rec.Status != idempotency.StatusAccepted || rec.CorrelationID != corr {
 		t.Fatalf("idempotency record = %+v, %v", rec, err)
+	}
+	entries := e.recorder.Entries()
+	if len(entries) != 1 || entries[0].Action != intlog.ActionWebhookReceived || entries[0].Status != intlog.StatusSuccess || entries[0].CorrelationID != corr {
+		t.Fatalf("integration log entries = %+v", entries)
 	}
 	if strings.Contains(e.logs.String(), platformKey) || strings.Contains(e.logs.String(), accessToken) {
 		t.Fatal("credentials leaked into logs")
@@ -192,6 +201,10 @@ func TestDuplicateWebhookIsNotQueuedTwice(t *testing.T) {
 	if !strings.Contains(e.logs.String(), "duplicate webhook ignored") {
 		t.Fatal("duplicate not logged")
 	}
+	entries := e.recorder.Entries()
+	if len(entries) != 2 || entries[1].Status != intlog.StatusDuplicate || entries[1].CorrelationID != entries[0].CorrelationID {
+		t.Fatalf("integration log entries = %+v", entries)
+	}
 }
 
 func TestEventTypeFromPathAndBatches(t *testing.T) {
@@ -214,7 +227,7 @@ func TestEventTypeFromPathAndBatches(t *testing.T) {
 	if e.queue.Len() != 2 {
 		t.Fatalf("queued = %d, want 2", e.queue.Len())
 	}
-	if job := e.nextJob(t); job.EventType != webhook.EventOrderConfirmed {
+	if job := e.nextJob(t); job.EventType != event.OrderConfirmed {
 		t.Fatalf("event type = %s", job.EventType)
 	}
 }
@@ -271,7 +284,7 @@ func TestEmptyPayloadIsAcknowledged(t *testing.T) {
 }
 
 func TestQueueOutageReleasesClaimAndReturns503(t *testing.T) {
-	e := newEnv(t, func(e *env, _ *webhook.Handler) { e.queue = nil })
+	e := newEnv(t, brokenQueue)
 	w := e.post("/webhooks/easyecom", validPayload, authHeaders())
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
@@ -285,47 +298,18 @@ func TestQueueOutageReleasesClaimAndReturns503(t *testing.T) {
 }
 
 func TestIdempotencyOutageReturns503(t *testing.T) {
-	e := newEnv(t, func(e *env, _ *webhook.Handler) { e.store = nil })
+	e := newEnv(t, brokenStore)
 	w := e.post("/webhooks/easyecom", validPayload, authHeaders())
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
 	}
 }
 
-func TestValidate(t *testing.T) {
-	good := webhook.Event{Platform: "easyecom", EventType: webhook.EventOrderCreated, ExternalOrderID: "1", RoutingKey: webhook.RoutingKey{Type: "warehouse_id", Value: "5"}, IdempotencyKey: "k", Payload: []byte(`{}`)}
-	if err := webhook.Validate(good); err != nil {
-		t.Fatalf("valid event rejected: %v", err)
-	}
-	tests := []struct {
-		name   string
-		mutate func(*webhook.Event)
-		want   string
-	}{
-		{"no platform", func(e *webhook.Event) { e.Platform = "" }, "platform is required"},
-		{"no key", func(e *webhook.Event) { e.IdempotencyKey = "" }, "idempotency key is required"},
-		{"no payload", func(e *webhook.Event) { e.Payload = nil }, "payload is required"},
-		{"no order id", func(e *webhook.Event) { e.ExternalOrderID = "" }, "external order id is required"},
-		{"no routing key", func(e *webhook.Event) { e.RoutingKey = webhook.RoutingKey{} }, "routing key is required"},
-		{"unknown type", func(e *webhook.Event) { e.EventType = "NOPE" }, "unknown event type"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ev := good
-			tt.mutate(&ev)
-			err := webhook.Validate(ev)
-			if err == nil || !strings.Contains(err.Error(), tt.want) {
-				t.Fatalf("err = %v, want %q", err, tt.want)
-			}
-		})
-	}
-}
-
 func TestEventTypeFromPath(t *testing.T) {
-	if got, ok := webhook.EventTypeFromPath(""); !ok || got != webhook.EventOrderCreated {
+	if got, ok := webhook.EventTypeFromPath(""); !ok || got != event.OrderCreated {
 		t.Fatalf("empty segment = %s, %v", got, ok)
 	}
-	if got, ok := webhook.EventTypeFromPath("tracking-updated"); !ok || got != webhook.EventTrackingUpdated {
+	if got, ok := webhook.EventTypeFromPath("tracking-updated"); !ok || got != event.TrackingUpdated {
 		t.Fatalf("tracking segment = %s, %v", got, ok)
 	}
 	if _, ok := webhook.EventTypeFromPath("nope"); ok {

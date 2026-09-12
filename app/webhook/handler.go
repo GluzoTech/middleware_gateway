@@ -16,8 +16,10 @@ import (
 	"github.com/gluzo/integration-gateway/app/apperror"
 	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/correlation"
+	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/httpserver/middleware"
 	"github.com/gluzo/integration-gateway/app/idempotency"
+	"github.com/gluzo/integration-gateway/app/intlog"
 	"github.com/gluzo/integration-gateway/app/queue"
 )
 
@@ -34,20 +36,39 @@ type Handler struct {
 	idempotency idempotency.Store
 	publisher   queue.Publisher
 	logger      *slog.Logger
+	recorder    intlog.Recorder
 	now         func() time.Time
 	newJobID    func() string
 }
 
+// Option configures a Handler.
+type Option func(*Handler)
+
+// WithRecorder sets the integration log recorder that receives one
+// WEBHOOK_RECEIVED entry per event.
+func WithRecorder(r intlog.Recorder) Option {
+	return func(h *Handler) {
+		if r != nil {
+			h.recorder = r
+		}
+	}
+}
+
 // NewHandler wires a handler for parser's platform.
-func NewHandler(parser Parser, store idempotency.Store, publisher queue.Publisher, logger *slog.Logger) *Handler {
-	return &Handler{
+func NewHandler(parser Parser, store idempotency.Store, publisher queue.Publisher, logger *slog.Logger, opts ...Option) *Handler {
+	h := &Handler{
 		parser:      parser,
 		idempotency: store,
 		publisher:   publisher,
 		logger:      logger,
+		recorder:    intlog.Nop{},
 		now:         time.Now,
 		newJobID:    uuid.NewString,
 	}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h
 }
 
 // Platform names the platform this handler serves; the router mounts it at
@@ -128,12 +149,12 @@ func (h *Handler) Handle(c *gin.Context) {
 		if i > 0 {
 			ev.CorrelationID = correlation.New()
 		}
-		if err := Validate(*ev); err != nil {
+		if err := event.Validate(*ev); err != nil {
 			h.reject(c, http.StatusBadRequest, fmt.Sprintf("event %d: %v", i, err))
 			return
 		}
 
-		status, err := h.admit(c, *ev)
+		result, err := h.admit(c, *ev)
 		if err != nil {
 			h.logger.ErrorContext(ctx, "webhook admission failed",
 				slog.String("platform", platform.Name),
@@ -147,10 +168,10 @@ func (h *Handler) Handle(c *gin.Context) {
 			})
 			return
 		}
-		if status.Status == "accepted" {
+		if result.Status == "accepted" {
 			accepted++
 		}
-		results = append(results, status)
+		results = append(results, result)
 	}
 
 	code := http.StatusOK
@@ -169,7 +190,7 @@ func (h *Handler) Handle(c *gin.Context) {
 // admit claims the idempotency key and publishes the job. On a duplicate it
 // reports the earlier correlation ID; on a publish failure it releases the
 // claim so the sender's retry can be accepted.
-func (h *Handler) admit(c *gin.Context, ev Event) (eventResult, error) {
+func (h *Handler) admit(c *gin.Context, ev event.Event) (eventResult, error) {
 	ctx := c.Request.Context()
 	claim, err := h.idempotency.Claim(ctx, idempotency.Record{
 		Key:           ev.IdempotencyKey,
@@ -191,6 +212,20 @@ func (h *Handler) admit(c *gin.Context, ev Event) (eventResult, error) {
 			slog.String("original_correlation_id", claim.Existing.CorrelationID),
 			slog.String("original_status", string(claim.Existing.Status)),
 		)
+		h.recorder.Record(ctx, intlog.Entry{
+			Timestamp:       h.now(),
+			CorrelationID:   claim.Existing.CorrelationID,
+			Platform:        ev.Platform,
+			IntegrationID:   ev.IntegrationID,
+			ExternalOrderID: ev.ExternalOrderID,
+			Action:          intlog.ActionWebhookReceived,
+			Status:          intlog.StatusDuplicate,
+			Details: map[string]any{
+				"event_type":               ev.EventType,
+				"duplicate_correlation_id": ev.CorrelationID,
+				"original_status":          string(claim.Existing.Status),
+			},
+		})
 		return eventResult{ExternalOrderID: ev.ExternalOrderID, CorrelationID: claim.Existing.CorrelationID, Status: "duplicate"}, nil
 	}
 
@@ -220,11 +255,25 @@ func (h *Handler) admit(c *gin.Context, ev Event) (eventResult, error) {
 		slog.String("platform", ev.Platform),
 		slog.String("event_type", ev.EventType),
 		slog.String("external_order_id", ev.ExternalOrderID),
-		slog.String("routing_key", ev.RoutingKey.Type+"="+ev.RoutingKey.Value),
+		slog.String("routing_key", ev.RoutingKey.String()),
 		slog.String("integration_id", ev.IntegrationID),
 		slog.String("job_id", job.ID),
 		slog.String("correlation_id", ev.CorrelationID),
 	)
+	h.recorder.Record(ctx, intlog.Entry{
+		Timestamp:       h.now(),
+		CorrelationID:   ev.CorrelationID,
+		Platform:        ev.Platform,
+		IntegrationID:   ev.IntegrationID,
+		ExternalOrderID: ev.ExternalOrderID,
+		Action:          intlog.ActionWebhookReceived,
+		Status:          intlog.StatusSuccess,
+		Details: map[string]any{
+			"event_type":  ev.EventType,
+			"routing_key": ev.RoutingKey.String(),
+			"job_id":      job.ID,
+		},
+	})
 	return eventResult{ExternalOrderID: ev.ExternalOrderID, CorrelationID: ev.CorrelationID, Status: "accepted"}, nil
 }
 
