@@ -316,6 +316,7 @@ func (c *Client) attempt(ctx context.Context, req Request, target string, body [
 // A cancellation coming from the caller's context is never retried; an
 // attempt timing out under its own deadline is.
 func (c *Client) classifyTransport(ctx, attemptCtx context.Context, err error) *apperror.Error {
+	err = redactURLError(err)
 	if ctx.Err() != nil {
 		return apperror.Classify(ctx.Err())
 	}
@@ -323,6 +324,23 @@ func (c *Client) classifyTransport(ctx, attemptCtx context.Context, err error) *
 		return apperror.Wrap(apperror.Timeout, fmt.Sprintf("attempt exceeded %s", c.timeout), err)
 	}
 	return apperror.Classify(err)
+}
+
+// redactURLError strips the query string and user info from the URL that
+// net/http embeds in transport errors, so credentials passed as query
+// parameters (as some OAuth endpoints require) never reach logs or state.
+func redactURLError(err error) error {
+	var uerr *url.Error
+	if !errors.As(err, &uerr) {
+		return err
+	}
+	u, perr := url.Parse(uerr.URL)
+	if perr != nil {
+		return &url.Error{Op: uerr.Op, URL: "[redacted]", Err: uerr.Err}
+	}
+	u.RawQuery = ""
+	u.User = nil
+	return &url.Error{Op: uerr.Op, URL: u.String(), Err: uerr.Err}
 }
 
 // fail stamps integration context onto an error.

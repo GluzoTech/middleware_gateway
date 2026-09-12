@@ -279,6 +279,24 @@ func TestInvalidJSONIsNotRetryable(t *testing.T) {
 	}
 }
 
+func TestTransportErrorsNeverEchoQueryCredentials(t *testing.T) {
+	// Port 9 is reserved and closed, so the dial fails immediately.
+	c := newClient(t, "http://127.0.0.1:9", &recordingSleep{}, httpclient.WithRetryPolicy(httpclient.NoRetry()), httpclient.WithTimeout(500*time.Millisecond))
+	_, err := c.Do(context.Background(), httpclient.Request{
+		Method: http.MethodGet, Path: "/oauth/token",
+		Query: url.Values{"grant_type": {"password"}, "password": {"hunter2"}},
+	})
+	if err == nil {
+		t.Fatal("expected a transport error")
+	}
+	if strings.Contains(err.Error(), "hunter2") || strings.Contains(err.Error(), "grant_type") {
+		t.Fatalf("query string leaked into error: %v", err)
+	}
+	if info := apperror.InfoOf(err); strings.Contains(info.Detail, "hunter2") {
+		t.Fatalf("query string leaked into error detail: %+v", info)
+	}
+}
+
 func TestRetryStatusOverride(t *testing.T) {
 	var calls atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
