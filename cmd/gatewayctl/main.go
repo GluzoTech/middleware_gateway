@@ -1,7 +1,7 @@
 // Command gatewayctl provides operator commands for the Gluzo Integration
-// Gateway: applying migrations and provisioning platforms, integrations and
-// access tokens. Secrets are printed exactly once, at creation time, and are
-// never stored in plaintext.
+// Gateway: applying migrations and provisioning platforms, integrations,
+// access tokens and routes. Secrets are printed exactly once, at creation
+// time, and are never stored in plaintext.
 package main
 
 import (
@@ -22,6 +22,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/database/migrations"
 	"github.com/gluzo/integration-gateway/app/database/postgres"
+	"github.com/gluzo/integration-gateway/app/routing"
 )
 
 const usage = `gatewayctl - operator commands for the Gluzo Integration Gateway
@@ -38,6 +39,10 @@ Usage:
   gatewayctl token issue --integration NAME --name LABEL [--ttl DURATION]
   gatewayctl token revoke --id TOKEN_ID
   gatewayctl token list --integration NAME
+  gatewayctl route add --integration NAME --type warehouse_id --value VALUE [--destination-ref REF]
+  gatewayctl route set-status --id ROUTE_ID --status active|disabled
+  gatewayctl route remove --id ROUTE_ID
+  gatewayctl route list --integration NAME
 
 Environment:
   DATABASE_URL  PostgreSQL connection URL (required)
@@ -85,6 +90,8 @@ func run(args []string, stdout, stderr io.Writer, lookup func(string) (string, b
 		return integrationCommand(ctx, args[1:], stdout, lookup)
 	case "token":
 		return tokenCommand(ctx, args[1:], stdout, stderr, lookup)
+	case "route":
+		return routeCommand(ctx, args[1:], stdout, lookup)
 	default:
 		return fmt.Errorf("%w: unknown command %q", errUsage, args[0])
 	}
@@ -298,6 +305,84 @@ func tokenCommand(ctx context.Context, args []string, stdout, stderr io.Writer, 
 		})
 	default:
 		return fmt.Errorf("%w: unknown token command %q", errUsage, args[0])
+	}
+}
+
+func routeCommand(ctx context.Context, args []string, stdout io.Writer, lookup func(string) (string, bool)) error {
+	if len(args) == 0 {
+		return errUsage
+	}
+	fs := flag.NewFlagSet("route "+args[0], flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	integration := fs.String("integration", "", "integration name")
+	routeType := fs.String("type", routing.TypeWarehouse, "route type, e.g. warehouse_id")
+	value := fs.String("value", "", "route value, e.g. the EasyEcom warehouse id")
+	destRef := fs.String("destination-ref", "", "destination-side reference, e.g. the Uniware facility code")
+	status := fs.String("status", "", "active or disabled")
+	id := fs.String("id", "", "route id")
+	if err := fs.Parse(args[1:]); err != nil {
+		return errUsage
+	}
+
+	withRoutes := func(fn func(*routing.Store) error) error {
+		return withPool(ctx, lookup, func(pool *pgxpool.Pool) error { return fn(routing.NewStore(pool)) })
+	}
+
+	switch args[0] {
+	case "add":
+		if *integration == "" || *routeType == "" || *value == "" {
+			return fmt.Errorf("%w: --integration, --type and --value are required", errUsage)
+		}
+		return withRoutes(func(store *routing.Store) error {
+			r, err := store.AddRoute(ctx, *integration, *routeType, *value, *destRef)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "route %s=%s -> integration %q added (id %s, destination ref %q)\n", r.Type, r.Value, *integration, r.ID, r.DestinationReference)
+			return nil
+		})
+	case "set-status":
+		routeID, err := uuid.Parse(*id)
+		if err != nil || *status == "" {
+			return fmt.Errorf("%w: --id (UUID) and --status are required", errUsage)
+		}
+		return withRoutes(func(store *routing.Store) error {
+			if err := store.SetRouteStatus(ctx, routeID, *status); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "route %s is now %s\n", routeID, *status)
+			return nil
+		})
+	case "remove":
+		routeID, err := uuid.Parse(*id)
+		if err != nil {
+			return fmt.Errorf("%w: --id must be a route UUID", errUsage)
+		}
+		return withRoutes(func(store *routing.Store) error {
+			if err := store.RemoveRoute(ctx, routeID); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "route %s removed\n", routeID)
+			return nil
+		})
+	case "list":
+		if *integration == "" {
+			return fmt.Errorf("%w: --integration is required", errUsage)
+		}
+		return withRoutes(func(store *routing.Store) error {
+			routes, err := store.ListRoutes(ctx, *integration)
+			if err != nil {
+				return err
+			}
+			tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tTYPE\tVALUE\tDESTINATION_REF\tSTATUS\tCREATED")
+			for _, r := range routes {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, r.Type, r.Value, r.DestinationReference, r.Status, r.CreatedAt.Format(time.RFC3339))
+			}
+			return tw.Flush()
+		})
+	default:
+		return fmt.Errorf("%w: unknown route command %q", errUsage, args[0])
 	}
 }
 
