@@ -63,7 +63,15 @@ func TestLoadFrom(t *testing.T) {
 				if cfg.EasyEcom.BaseURL != "https://api.easyecom.io" || cfg.EasyEcom.Timeout != 15*time.Second {
 					t.Errorf("easyecom defaults = %+v", cfg.EasyEcom)
 				}
+				if cfg.Queue.Stream != "gluzo:jobs" || cfg.Queue.Group != "gateway-workers" || cfg.Queue.MaxDeliveries != 5 || cfg.Queue.MaxLen != 100_000 {
+					t.Errorf("queue defaults = %+v", cfg.Queue)
+				}
 			},
+		},
+		{
+			name:    "queue max deliveries must be positive",
+			env:     merge(base, map[string]string{"QUEUE_MAX_DELIVERIES": "0"}),
+			wantErr: "QUEUE_MAX_DELIVERIES must be at least 1",
 		},
 		{
 			name: "easyecom credentials are read",

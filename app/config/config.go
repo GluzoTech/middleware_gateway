@@ -31,7 +31,19 @@ type Config struct {
 	Database Database
 	Redis    Redis
 	Storage  Storage
+	Queue    Queue
 	EasyEcom EasyEcom
+}
+
+// Queue tunes the Redis Streams job queue.
+type Queue struct {
+	Stream        string
+	Group         string
+	BatchSize     int
+	BlockTimeout  time.Duration
+	ClaimMinIdle  time.Duration
+	MaxDeliveries int
+	MaxLen        int64
 }
 
 // EasyEcom holds credentials for outbound EasyEcom API calls. Every call
@@ -132,6 +144,15 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			WorkflowDirectory: r.str("WORKFLOW_DIRECTORY", "./storage/workflows"),
 			LogRetentionDays:  r.int("LOG_RETENTION_DAYS", 30),
 		},
+		Queue: Queue{
+			Stream:        r.str("QUEUE_STREAM", "gluzo:jobs"),
+			Group:         r.str("QUEUE_GROUP", "gateway-workers"),
+			BatchSize:     r.int("QUEUE_BATCH_SIZE", 10),
+			BlockTimeout:  r.duration("QUEUE_BLOCK_TIMEOUT", 5*time.Second),
+			ClaimMinIdle:  r.duration("QUEUE_CLAIM_MIN_IDLE", 60*time.Second),
+			MaxDeliveries: r.int("QUEUE_MAX_DELIVERIES", 5),
+			MaxLen:        r.int64("QUEUE_MAX_LEN", 100_000),
+		},
 		EasyEcom: EasyEcom{
 			BaseURL:     r.str("EASYECOM_BASE_URL", "https://api.easyecom.io"),
 			APIKey:      r.str("EASYECOM_API_KEY", ""),
@@ -185,6 +206,18 @@ func (c *Config) Validate() error {
 	if c.Storage.LogRetentionDays < 1 {
 		errs = append(errs, errors.New("LOG_RETENTION_DAYS must be at least 1"))
 	}
+	if c.Queue.Stream == "" || c.Queue.Group == "" {
+		errs = append(errs, errors.New("QUEUE_STREAM and QUEUE_GROUP are required"))
+	}
+	if c.Queue.BatchSize < 1 {
+		errs = append(errs, errors.New("QUEUE_BATCH_SIZE must be at least 1"))
+	}
+	if c.Queue.MaxDeliveries < 1 {
+		errs = append(errs, errors.New("QUEUE_MAX_DELIVERIES must be at least 1"))
+	}
+	if c.Queue.MaxLen < 1 {
+		errs = append(errs, errors.New("QUEUE_MAX_LEN must be at least 1"))
+	}
 
 	durations := []struct {
 		name  string
@@ -198,6 +231,8 @@ func (c *Config) Validate() error {
 		{"DATABASE_CONNECT_TIMEOUT", c.Database.ConnectTimeout},
 		{"REDIS_CONNECT_TIMEOUT", c.Redis.ConnectTimeout},
 		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
+		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
+		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
 	}
 	for _, d := range durations {
 		if d.value <= 0 {
