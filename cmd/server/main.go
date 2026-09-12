@@ -1,5 +1,6 @@
-// Command server runs the Gluzo Integration Gateway: the webhook intake API
-// and, unless WORKER_ENABLED=false, the job worker that executes workflows.
+// Command server runs the Gluzo Integration Gateway: the webhook intake API,
+// the protected admin log viewer and, unless WORKER_ENABLED=false, the job
+// worker that executes workflows.
 package main
 
 import (
@@ -15,6 +16,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/gluzo/integration-gateway/app/admin"
 	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/config"
 	"github.com/gluzo/integration-gateway/app/database/migrations"
@@ -106,9 +108,13 @@ func run() error {
 		return err
 	}
 
-	// The integration log recorder; replaced by the JSONL writer in the
-	// logging phase.
-	var recorder intlog.Recorder = intlog.Nop{}
+	// Append-only, date-partitioned integration log shared by intake and
+	// the workflow engine.
+	recorder, err := intlog.NewFileRecorder(cfg.Storage.LogDirectory, intlog.WithLogger(logger))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = recorder.Close() }()
 
 	credentials := auth.NewStore(pool)
 	idempotencyStore := idempotency.NewPostgresStore(pool)
@@ -131,6 +137,41 @@ func run() error {
 		logger.Warn("worker disabled: this instance accepts webhooks but executes no workflows")
 	}
 
+	// Retention prunes expired log days, idempotency records and completed
+	// workflow state on one schedule with one cutoff.
+	retention, err := intlog.NewRetention(cfg.Storage.LogDirectory, cfg.Storage.LogRetentionDays, logger)
+	if err != nil {
+		return err
+	}
+	retention.AddHook(func(ctx context.Context, cutoff time.Time) error {
+		n, err := idempotencyStore.DeleteOlderThan(ctx, cutoff)
+		if n > 0 {
+			logger.Info("retention removed idempotency records", slog.Int64("count", n))
+		}
+		return err
+	})
+	retention.AddHook(func(_ context.Context, cutoff time.Time) error {
+		n, err := stateRepo.DeleteCompletedBefore(cutoff)
+		if n > 0 {
+			logger.Info("retention removed completed workflow states", slog.Int("count", n))
+		}
+		return err
+	})
+
+	var adminHandler *admin.Handler
+	if cfg.Admin.LogViewerToken != "" {
+		var resumer admin.Resumer
+		if jobWorker != nil {
+			resumer = jobWorker
+		}
+		adminHandler, err = admin.NewHandler(intlog.NewReader(cfg.Storage.LogDirectory), stateRepo, resumer, logger)
+		if err != nil {
+			return err
+		}
+	} else {
+		logger.Warn("ADMIN_LOG_VIEWER_TOKEN is empty: the admin log viewer is disabled")
+	}
+
 	healthHandler := health.NewHandler(config.ServiceName, version, readinessTimeout, logger,
 		postgres.Checker{Pool: pool},
 		redisconn.Checker{Client: rdb},
@@ -142,17 +183,19 @@ func run() error {
 		PlatformKeys: credentials,
 		AccessTokens: credentials,
 		Webhooks:     []*webhook.Handler{easyecomWebhook},
+		Admin:        adminHandler,
+		AdminToken:   cfg.Admin.LogViewerToken,
 	})
 	srv := httpserver.New(cfg.App.Port, cfg.HTTP, router)
 
-	// The HTTP server and the worker share the signal context: the first
-	// failure cancels the other, and a signal drains both.
+	// The HTTP server, the worker and the retention job share the signal
+	// context: the first failure cancels the others, and a signal drains all.
 	var wg sync.WaitGroup
 	errs := make(chan error, 2)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logger.Info("starting gateway", slog.Int("port", cfg.App.Port), slog.Bool("worker", jobWorker != nil))
+		logger.Info("starting gateway", slog.Int("port", cfg.App.Port), slog.Bool("worker", jobWorker != nil), slog.Bool("admin", adminHandler != nil))
 		if err := httpserver.Run(ctx, srv, cfg.App.ShutdownTimeout, logger); err != nil {
 			errs <- err
 			stop()
@@ -168,6 +211,11 @@ func run() error {
 			}
 		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		retention.Run(ctx, cfg.Storage.LogRetentionInterval)
+	}()
 	wg.Wait()
 	close(errs)
 
