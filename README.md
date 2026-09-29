@@ -1,9 +1,13 @@
 # Gluzo Integration Gateway
 
 A production-oriented integration gateway written in Go. It receives order
-webhooks from EasyEcom, converts them into Gluzo's domain model, and
-synchronises them with Dabur's Uniware APIs through a resumable, retryable,
-fully traced workflow.
+webhooks from EasyEcom, converts them into Gluzo's domain model, and hands
+them to a dropship fulfilment vendor through a resumable, retryable, fully
+traced workflow.
+
+The vendor side is a role-based abstraction (`app/vendor`). No vendor adapter
+is implemented yet; Vinculum eRetail is the first, see
+[docs/vinculum-integration-plan.md](docs/vinculum-integration-plan.md).
 
 ## Quick start
 
@@ -25,9 +29,9 @@ go run ./cmd/server
 ```bash
 export DATABASE_URL=postgres://gluzo:gluzo@localhost:5432/gluzo_gateway?sslmode=disable
 go run ./cmd/gatewayctl platform create --name easyecom --type source
-go run ./cmd/gatewayctl platform create --name dabur --type destination
-go run ./cmd/gatewayctl integration create --name easyecom-dabur --source easyecom --destination dabur
-go run ./cmd/gatewayctl token issue --integration easyecom-dabur --name "easyecom webhook"
+go run ./cmd/gatewayctl platform create --name vinculum --type destination
+go run ./cmd/gatewayctl integration create --name easyecom-vinculum --source easyecom --destination vinculum
+go run ./cmd/gatewayctl token issue --integration easyecom-vinculum --name "easyecom webhook"
 ```
 
 Each secret is printed once. See [docs/authentication.md](docs/authentication.md).
@@ -76,7 +80,8 @@ app/health        liveness and readiness endpoints
 app/httpclient    resilient HTTP client for external APIs
 app/httpserver    router, middleware, hardened HTTP server
 app/idempotency   duplicate-event protection
-app/integrations  platform adapters (EasyEcom source, Dabur/Uniware destination)
+app/integrations  platform adapters (EasyEcom origin; vendor adapters)
+app/vendor        vendor/origin role contracts and the adapter registry
 app/intlog        append-only JSONL execution log, sanitiser, reader, retention
 app/logging       structured application logger
 app/queue         job queue (in-memory and Redis Streams)

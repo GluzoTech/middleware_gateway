@@ -220,11 +220,11 @@ func TestInventoryAndTrackingEndpoints(t *testing.T) {
 	c, _ := easyecom.NewClient(f.config(), noBackoff())
 	ctx := context.Background()
 
-	inv, err := c.GetInventoryDetails(ctx, dtoinventory.GetInventoryDetailsRequest{SKU: "DAB-1", WarehouseID: "5"})
+	inv, err := c.GetInventoryDetails(ctx, dtoinventory.GetInventoryDetailsRequest{SKU: "BCP-1", WarehouseID: "5"})
 	if err != nil {
 		t.Fatalf("GetInventoryDetails: %v", err)
 	}
-	if len(inv.Data) != 1 || inv.Data[0].SKU != "DAB-1" || int64(inv.Data[0].AvailableInventory) != 42 {
+	if len(inv.Data) != 1 || inv.Data[0].SKU != "BCP-1" || int64(inv.Data[0].AvailableInventory) != 42 {
 		t.Fatalf("unexpected inventory: %+v", inv.Data)
 	}
 

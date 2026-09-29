@@ -70,7 +70,7 @@ func TestOrderFieldsAndFlexibleTypes(t *testing.T) {
 	if len(items) != 2 {
 		t.Fatalf("items = %d, want 2", len(items))
 	}
-	if items[0].SKU != "DAB-CHY-500" || int64(items[0].Quantity) != 2 || float64(items[0].SellingPrice) != 499.75 || float64(items[0].TaxRate) != 18 {
+	if items[0].SKU != "BCP-CHY-500" || int64(items[0].Quantity) != 2 || float64(items[0].SellingPrice) != 499.75 || float64(items[0].TaxRate) != 18 {
 		t.Fatalf("item not decoded: %+v", items[0])
 	}
 }
@@ -80,7 +80,7 @@ func TestItemsFallsBackToSuborders(t *testing.T) {
 	if err := json.Unmarshal(fixture(t, "order_details_v1.json"), &resp); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got := resp.Data.Orders[0].Items(); len(got) != 1 || got[0].SKU != "DAB-HNY-250" {
+	if got := resp.Data.Orders[0].Items(); len(got) != 1 || got[0].SKU != "BCP-HNY-250" {
 		t.Fatalf("suborders not used as items: %+v", got)
 	}
 }

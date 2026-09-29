@@ -21,11 +21,11 @@ func TestRoutingStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePlatform: %v", err)
 	}
-	dst, _, err := creds.CreatePlatform(ctx, "dabur-"+suffix, auth.PlatformTypeDestination)
+	dst, _, err := creds.CreatePlatform(ctx, "vinculum-"+suffix, auth.PlatformTypeDestination)
 	if err != nil {
 		t.Fatalf("CreatePlatform: %v", err)
 	}
-	integ, err := creds.CreateIntegration(ctx, "easyecom-dabur-"+suffix, src.Name, dst.Name)
+	integ, err := creds.CreateIntegration(ctx, "easyecom-vinculum-"+suffix, src.Name, dst.Name)
 	if err != nil {
 		t.Fatalf("CreateIntegration: %v", err)
 	}
@@ -34,11 +34,11 @@ func TestRoutingStore(t *testing.T) {
 		t.Fatalf("CreateIntegration other: %v", err)
 	}
 
-	route, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "12345", "DABUR-DEL")
+	route, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "12345", "DEL")
 	if err != nil {
 		t.Fatalf("AddRoute: %v", err)
 	}
-	if route.IntegrationID != integ.ID || route.Status != routing.StatusActive || route.DestinationReference != "DABUR-DEL" {
+	if route.IntegrationID != integ.ID || route.Status != routing.StatusActive || route.DestinationReference != "DEL" {
 		t.Fatalf("unexpected route: %+v", route)
 	}
 	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "12345", ""); !errors.Is(err, routing.ErrAlreadyExists) {
@@ -56,7 +56,7 @@ func TestRoutingStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if res.IntegrationID != integ.ID || res.IntegrationName != integ.Name || res.SourcePlatform != src.Name || res.DestinationPlatform != dst.Name || res.Route.DestinationReference != "DABUR-DEL" {
+	if res.IntegrationID != integ.ID || res.IntegrationName != integ.Name || res.SourcePlatform != src.Name || res.DestinationPlatform != dst.Name || res.Route.DestinationReference != "DEL" {
 		t.Fatalf("unexpected resolution: %+v", res)
 	}
 

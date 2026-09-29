@@ -33,7 +33,7 @@ func newTestRouter() http.Handler {
 	creds := auth.NewMemoryStore()
 	platform := auth.Platform{ID: uuid.New(), Name: "easyecom", Type: auth.PlatformTypeSource, Status: auth.StatusActive}
 	creds.AddPlatform(platform, testPlatformKey)
-	integ := auth.Integration{ID: uuid.New(), Name: "easyecom-dabur", SourcePlatformID: platform.ID, Status: auth.StatusActive}
+	integ := auth.Integration{ID: uuid.New(), Name: "easyecom-vinculum", SourcePlatformID: platform.ID, Status: auth.StatusActive}
 	creds.AddToken(auth.Token{ID: uuid.New(), IntegrationID: integ.ID}, integ, testToken)
 
 	return httpserver.NewRouter(httpserver.Dependencies{

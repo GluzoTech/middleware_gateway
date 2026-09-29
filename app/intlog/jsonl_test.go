@@ -42,7 +42,7 @@ func TestFileRecorderWritesDatePartitionedJSONL(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	rec.Record(ctx, intlog.Entry{Timestamp: day1, CorrelationID: "INT-1", Workflow: "ORDER_SYNC", Integration: "dabur", Action: "FETCH_ORDER", Status: intlog.StatusSuccess, Attempt: 1, DurationMS: 420})
+	rec.Record(ctx, intlog.Entry{Timestamp: day1, CorrelationID: "INT-1", Workflow: "ORDER_SYNC", Integration: "vinculum", Action: "FETCH_ORDER", Status: intlog.StatusSuccess, Attempt: 1, DurationMS: 420})
 	rec.Record(ctx, intlog.Entry{Timestamp: day1.Add(time.Minute), CorrelationID: "INT-1", Action: "FETCH_INVENTORY", Status: intlog.StatusFailed, Attempt: 1,
 		Error: &apperror.Info{Category: apperror.Timeout, Message: "timeout", Retryable: true}})
 	rec.Record(ctx, intlog.Entry{Timestamp: day1.Add(2 * time.Minute), CorrelationID: "INT-1", Action: "FETCH_INVENTORY", Status: intlog.StatusSuccess, Attempt: 2})

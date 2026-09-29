@@ -20,7 +20,7 @@ Authorization: Bearer gluzo_at_...
 ```
 
 Identifies the **integration** the event belongs to (for example
-`easyecom-dabur`). Tokens have an optional expiry, can be revoked at any time,
+`easyecom-vinculum`). Tokens have an optional expiry, can be revoked at any time,
 and several may exist per integration so they can be rotated without
 downtime. It answers "which configured pipeline may this caller feed?".
 
@@ -67,18 +67,18 @@ exactly once:
 export DATABASE_URL=postgres://...
 go run ./cmd/gatewayctl migrate
 go run ./cmd/gatewayctl platform create --name easyecom --type source
-go run ./cmd/gatewayctl platform create --name dabur --type destination
-go run ./cmd/gatewayctl integration create --name easyecom-dabur --source easyecom --destination dabur
-go run ./cmd/gatewayctl token issue --integration easyecom-dabur --name "easyecom webhook" --ttl 8760h
+go run ./cmd/gatewayctl platform create --name vinculum --type destination
+go run ./cmd/gatewayctl integration create --name easyecom-vinculum --source easyecom --destination vinculum
+go run ./cmd/gatewayctl token issue --integration easyecom-vinculum --name "easyecom webhook" --ttl 8760h
 ```
 
 Rotation and revocation:
 
 ```bash
 go run ./cmd/gatewayctl platform rotate-key --name easyecom   # old key stops working immediately
-go run ./cmd/gatewayctl token issue --integration easyecom-dabur --name "webhook 2027"
+go run ./cmd/gatewayctl token issue --integration easyecom-vinculum --name "webhook 2027"
 go run ./cmd/gatewayctl token revoke --id <old token id>
-go run ./cmd/gatewayctl token list --integration easyecom-dabur
+go run ./cmd/gatewayctl token list --integration easyecom-vinculum
 ```
 
 Issue the replacement token before revoking the old one so the sender can be

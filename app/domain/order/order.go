@@ -1,6 +1,6 @@
 // Package order defines Gluzo's internal representation of a customer order.
 //
-// The domain knows nothing about EasyEcom, Dabur or any other platform:
+// The domain knows nothing about EasyEcom, Vinculum or any other platform:
 // mappers in the integration packages translate to and from these types.
 // Fields carry no external JSON names; serialisation for workflow state uses
 // Go field names.

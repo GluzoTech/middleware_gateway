@@ -35,7 +35,6 @@ type Config struct {
 	Worker   Worker
 	Admin    Admin
 	EasyEcom EasyEcom
-	Dabur    Dabur
 }
 
 // Admin protects the operator endpoints. An empty token leaves them
@@ -53,20 +52,6 @@ type Worker struct {
 	RecoveryInterval  time.Duration
 	StaleRunningAfter time.Duration
 	RetryFailedAfter  time.Duration
-}
-
-// Dabur holds credentials for Dabur's Uniware tenant. Presence is validated
-// when the Dabur client is built (worker enabled).
-type Dabur struct {
-	BaseURL              string
-	Username             string
-	Password             string
-	ClientID             string
-	DefaultFacility      string
-	Channel              string
-	ShelfCode            string
-	VerificationRequired bool
-	Timeout              time.Duration
 }
 
 // Queue tunes the Redis Streams job queue.
@@ -209,17 +194,6 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			LocationKey: r.str("EASYECOM_LOCATION_KEY", ""),
 			Timeout:     r.duration("EASYECOM_TIMEOUT", 15*time.Second),
 		},
-		Dabur: Dabur{
-			BaseURL:              r.str("DABUR_BASE_URL", ""),
-			Username:             r.str("DABUR_USERNAME", ""),
-			Password:             r.str("DABUR_PASSWORD", ""),
-			ClientID:             r.str("DABUR_CLIENT_ID", "my-trusted-client"),
-			DefaultFacility:      r.str("DABUR_DEFAULT_FACILITY", ""),
-			Channel:              r.str("DABUR_CHANNEL", ""),
-			ShelfCode:            r.str("DABUR_SHELF_CODE", "DEFAULT"),
-			VerificationRequired: r.bool("DABUR_VERIFICATION_REQUIRED", false),
-			Timeout:              r.duration("DABUR_TIMEOUT", 20*time.Second),
-		},
 	}
 
 	if err := r.err(); err != nil {
@@ -301,7 +275,6 @@ func (c *Config) Validate() error {
 		{"WORKER_RECOVERY_INTERVAL", c.Worker.RecoveryInterval},
 		{"WORKER_STALE_RUNNING_AFTER", c.Worker.StaleRunningAfter},
 		{"WORKER_RETRY_FAILED_AFTER", c.Worker.RetryFailedAfter},
-		{"DABUR_TIMEOUT", c.Dabur.Timeout},
 	}
 	for _, d := range durations {
 		if d.value <= 0 {

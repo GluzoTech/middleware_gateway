@@ -15,10 +15,10 @@ func TestInfoOf(t *testing.T) {
 	}
 
 	e := apperror.Wrap(apperror.ExternalAPI, "unexpected status 502", errors.New("upstream said no"))
-	e.Integration, e.Operation, e.HTTPStatus, e.ExternalCode = "dabur", "CreateSaleOrder", 502, "E1"
+	e.Integration, e.Operation, e.HTTPStatus, e.ExternalCode = "vinculum", "CreateOrder", 502, "E1"
 	e.Retryable = true
 	info := apperror.InfoOf(e)
-	if info.Category != apperror.ExternalAPI || info.Message != "unexpected status 502" || !info.Retryable || info.HTTPStatus != 502 || info.ExternalCode != "E1" || info.Detail != "upstream said no" || info.Operation != "CreateSaleOrder" {
+	if info.Category != apperror.ExternalAPI || info.Message != "unexpected status 502" || !info.Retryable || info.HTTPStatus != 502 || info.ExternalCode != "E1" || info.Detail != "upstream said no" || info.Operation != "CreateOrder" {
 		t.Fatalf("unexpected info: %+v", info)
 	}
 	if !strings.Contains(info.String(), "upstream said no") {

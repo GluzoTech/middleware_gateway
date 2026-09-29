@@ -29,8 +29,8 @@ import (
 const (
 	platformKey  = "gluzo_pk_easyecom"
 	otherKey     = "gluzo_pk_shopify"
-	accessToken  = "gluzo_at_easyecom_dabur"
-	otherToken   = "gluzo_at_shopify_dabur"
+	accessToken  = "gluzo_at_easyecom_vinculum"
+	otherToken   = "gluzo_at_shopify_vinculum"
 	validPayload = `[{"order_id":9876543,"invoice_id":"INV-1","reference_code":"AMZ-1","warehouse_id":12345,"order_items":[{"sku":"A","suborder_quantity":1}]}]`
 )
 
@@ -78,9 +78,9 @@ func newEnv(t *testing.T, opts ...envOption) *env {
 	shopify := auth.Platform{ID: uuid.New(), Name: "shopify", Type: auth.PlatformTypeSource, Status: auth.StatusActive}
 	creds.AddPlatform(e.platform, platformKey)
 	creds.AddPlatform(shopify, otherKey)
-	e.integ = auth.Integration{ID: uuid.New(), Name: "easyecom-dabur", SourcePlatformID: e.platform.ID, Status: auth.StatusActive}
+	e.integ = auth.Integration{ID: uuid.New(), Name: "easyecom-vinculum", SourcePlatformID: e.platform.ID, Status: auth.StatusActive}
 	creds.AddToken(auth.Token{ID: uuid.New(), IntegrationID: e.integ.ID}, e.integ, accessToken)
-	shopifyInteg := auth.Integration{ID: uuid.New(), Name: "shopify-dabur", SourcePlatformID: shopify.ID, Status: auth.StatusActive}
+	shopifyInteg := auth.Integration{ID: uuid.New(), Name: "shopify-vinculum", SourcePlatformID: shopify.ID, Status: auth.StatusActive}
 	creds.AddToken(auth.Token{ID: uuid.New(), IntegrationID: shopifyInteg.ID}, shopifyInteg, otherToken)
 
 	var store idempotency.Store = e.store

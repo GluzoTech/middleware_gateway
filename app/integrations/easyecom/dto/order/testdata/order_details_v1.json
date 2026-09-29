@@ -21,7 +21,7 @@
         "suborders": [
           {
             "suborder_id": "6001",
-            "sku": "DAB-HNY-250",
+            "sku": "BCP-HNY-250",
             "product_id": "778",
             "suborder_quantity": 1,
             "tax_rate": 5,
@@ -49,7 +49,7 @@
         "suborders": [
           {
             "suborder_id": "6002",
-            "sku": "DAB-RED-100",
+            "sku": "BCP-RED-100",
             "product_id": "779",
             "suborder_quantity": 1,
             "tax_rate": 12,

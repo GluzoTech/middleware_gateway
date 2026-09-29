@@ -17,11 +17,11 @@ func TestMemoryResolver(t *testing.T) {
 	other := uuid.New()
 
 	r.Add(routing.Resolution{
-		Route:               routing.Route{ID: uuid.New(), IntegrationID: integ, Type: routing.TypeWarehouse, Value: "12345", DestinationReference: "DABUR-DEL"},
+		Route:               routing.Route{ID: uuid.New(), IntegrationID: integ, Type: routing.TypeWarehouse, Value: "12345", DestinationReference: "DEL"},
 		IntegrationID:       integ,
-		IntegrationName:     "easyecom-dabur",
+		IntegrationName:     "easyecom-vinculum",
 		SourcePlatform:      "easyecom",
-		DestinationPlatform: "dabur",
+		DestinationPlatform: "vinculum",
 	})
 	r.Add(routing.Resolution{
 		Route:         routing.Route{ID: uuid.New(), IntegrationID: integ, Type: routing.TypeWarehouse, Value: "99999", Status: routing.StatusDisabled},
@@ -32,7 +32,7 @@ func TestMemoryResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if res.DestinationPlatform != "dabur" || res.Route.DestinationReference != "DABUR-DEL" || res.IntegrationName != "easyecom-dabur" {
+	if res.DestinationPlatform != "vinculum" || res.Route.DestinationReference != "DEL" || res.IntegrationName != "easyecom-vinculum" {
 		t.Fatalf("unexpected resolution: %+v", res)
 	}
 

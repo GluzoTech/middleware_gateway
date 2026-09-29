@@ -90,15 +90,15 @@ func TestErrorFormatting(t *testing.T) {
 	e := &apperror.Error{
 		Category:        apperror.ExternalAPI,
 		Message:         "unexpected status",
-		Integration:     "dabur",
-		Operation:       "CreateSaleOrder",
+		Integration:     "vinculum",
+		Operation:       "CreateOrder",
 		HTTPStatus:      502,
 		ExternalCode:    "E42",
 		ExternalMessage: "upstream unavailable",
 		Err:             errors.New("cause"),
 	}
 	got := e.Error()
-	for _, want := range []string{"external_api_error", "unexpected status", "[dabur CreateSaleOrder]", "http 502", "code E42", "upstream unavailable", "cause"} {
+	for _, want := range []string{"external_api_error", "unexpected status", "[vinculum CreateOrder]", "http 502", "code E42", "upstream unavailable", "cause"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("Error() = %q, missing %q", got, want)
 		}

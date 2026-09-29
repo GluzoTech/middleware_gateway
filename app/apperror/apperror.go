@@ -42,7 +42,7 @@ type Error struct {
 	Retryable bool
 
 	// Context of the failing operation, when known.
-	Integration string // e.g. "easyecom", "dabur"
+	Integration string // e.g. "easyecom", "vinculum"
 	Operation   string // e.g. "GetOrderDetails"
 
 	// What the remote API said, when the failure came from one.

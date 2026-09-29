@@ -78,13 +78,13 @@ func TestSourceRejectsUnusablePayload(t *testing.T) {
 
 func TestSourceInventoryAndTracking(t *testing.T) {
 	_, src := newSource(t)
-	o := order.Order{ExternalID: "1", InvoiceNumber: "INV-1", WarehouseID: "5", Items: []order.Item{{SKU: "DAB-1", Quantity: 1}, {SKU: "DAB-1", Quantity: 2}, {SKU: "DAB-2", Quantity: 1}}}
+	o := order.Order{ExternalID: "1", InvoiceNumber: "INV-1", WarehouseID: "5", Items: []order.Item{{SKU: "BCP-1", Quantity: 1}, {SKU: "BCP-1", Quantity: 2}, {SKU: "BCP-2", Quantity: 1}}}
 
 	levels, err := src.FetchInventory(context.Background(), o)
 	if err != nil {
 		t.Fatalf("FetchInventory: %v", err)
 	}
-	if len(levels) != 2 || levels[0].SKU != "DAB-1" || levels[0].Available != 42 || levels[1].SKU != "DAB-2" {
+	if len(levels) != 2 || levels[0].SKU != "BCP-1" || levels[0].Available != 42 || levels[1].SKU != "BCP-2" {
 		t.Fatalf("levels = %+v (duplicate SKUs must be queried once)", levels)
 	}
 

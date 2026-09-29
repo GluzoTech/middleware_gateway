@@ -26,12 +26,12 @@ import (
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpserver"
 	"github.com/gluzo/integration-gateway/app/idempotency"
-	"github.com/gluzo/integration-gateway/app/integrations/dabur"
 	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
 	"github.com/gluzo/integration-gateway/app/intlog"
 	"github.com/gluzo/integration-gateway/app/logging"
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
 	"github.com/gluzo/integration-gateway/app/routing"
+	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/webhook"
 	"github.com/gluzo/integration-gateway/app/worker"
 	"github.com/gluzo/integration-gateway/app/workflow"
@@ -253,26 +253,33 @@ func buildWorker(
 	if err != nil {
 		return nil, fmt.Errorf("configure EasyEcom client (set WORKER_ENABLED=false for an intake-only instance): %w", err)
 	}
-	daburClient, err := dabur.NewClient(dabur.Config{
-		BaseURL:              cfg.Dabur.BaseURL,
-		Username:             cfg.Dabur.Username,
-		Password:             cfg.Dabur.Password,
-		ClientID:             cfg.Dabur.ClientID,
-		DefaultFacility:      cfg.Dabur.DefaultFacility,
-		Channel:              cfg.Dabur.Channel,
-		ShelfCode:            cfg.Dabur.ShelfCode,
-		VerificationRequired: cfg.Dabur.VerificationRequired,
-		Timeout:              cfg.Dabur.Timeout,
-	}, dabur.WithLogger(logger))
-	if err != nil {
-		return nil, fmt.Errorf("configure Dabur client (set WORKER_ENABLED=false for an intake-only instance): %w", err)
+	// Fulfilment vendors. Each adapter declares its capabilities by the
+	// roles it implements; the registry discovers them. Adding a partner is
+	// one MustRegister call and a route row.
+	//
+	// The previous vendor pipeline is gone and Vinculum is not yet written, so this is
+	// deliberately empty. An instance in this state accepts webhooks but has
+	// nothing to submit orders to.
+	vendors := vendor.NewRegistry()
+
+	if len(vendors.Platforms()) == 0 {
+		logger.Warn("no fulfilment vendor is registered: ORDER_SYNC is not available; run with WORKER_ENABLED=false until a vendor adapter is wired")
+		return worker.New(worker.Dependencies{
+			Queue:       jobQueue,
+			Registry:    registry,
+			Executor:    executor,
+			States:      states,
+			Idempotency: idempotencyStore,
+			Recorder:    recorder,
+			Logger:      logger,
+		}, workerConfig(cfg))
 	}
 
 	orderSync, err := ordersync.New(ordersync.Dependencies{
-		Resolver:     routing.NewStore(pool),
-		Sources:      map[string]ordersync.Source{easyecom.PlatformName: easyecom.NewSource(easyecomClient, logger)},
-		Destinations: map[string]ordersync.Destination{dabur.PlatformName: dabur.NewDestination(daburClient, logger)},
-		Logger:       logger,
+		Resolver: routing.NewStore(pool),
+		Origins:  map[string]vendor.Origin{easyecom.PlatformName: easyecom.NewSource(easyecomClient, logger)},
+		Vendors:  vendors,
+		Logger:   logger,
 	})
 	if err != nil {
 		return nil, err
@@ -289,11 +296,15 @@ func buildWorker(
 		Idempotency: idempotencyStore,
 		Recorder:    recorder,
 		Logger:      logger,
-	}, worker.Config{
+	}, workerConfig(cfg))
+}
+
+func workerConfig(cfg *config.Config) worker.Config {
+	return worker.Config{
 		Concurrency:       cfg.Worker.Concurrency,
 		MaxAutoResumes:    cfg.Worker.MaxAutoResumes,
 		RecoveryInterval:  cfg.Worker.RecoveryInterval,
 		StaleRunningAfter: cfg.Worker.StaleRunningAfter,
 		RetryFailedAfter:  cfg.Worker.RetryFailedAfter,
-	})
+	}
 }

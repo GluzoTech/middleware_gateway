@@ -2,9 +2,11 @@
 
 ## Purpose
 
-The Gluzo Integration Gateway receives order events from a source platform
-(today: EasyEcom), converts them into Gluzo's own domain model, and pushes the
-result to a destination platform (today: Dabur's Uniware instance).
+The Gluzo Integration Gateway receives order events from an origin platform
+(today: EasyEcom), converts them into Gluzo's own domain model, and hands the
+result to a dropship fulfilment vendor. No vendor adapter is implemented yet;
+Vinculum eRetail is the first, see
+[vinculum-integration-plan.md](vinculum-integration-plan.md).
 
 It is an integration *engine* built for one production use case. The
 boundaries are chosen so that new sources and destinations can be added later
@@ -29,7 +31,7 @@ EasyEcom ──webhook──▶ Webhook Handler
               Action 1 → Action 2 → … → Action N
                           │
                           ▼
-              Integration clients (EasyEcom, Dabur)
+              Integration clients (EasyEcom, vendor adapters)
                           │
               ┌───────────┴───────────┐
               ▼                       ▼
@@ -46,8 +48,8 @@ External API DTO ──mapper──▶ Gluzo domain model ──mapper──▶ 
 ```
 
 External DTOs never cross an integration boundary. EasyEcom types are only
-visible inside `app/integrations/easyecom`; Dabur types only inside
-`app/integrations/dabur`. The workflow engine and its actions speak the domain
+visible inside `app/integrations/easyecom`, and a vendor's types only inside
+that vendor's package. The workflow engine and its actions speak the domain
 model only.
 
 ## Package layout
@@ -70,7 +72,7 @@ model only.
 | `app/event` | Platform-neutral event model shared by intake, queue and workflows | 3 |
 | `app/intlog` | Integration execution log: schema, recorder contract, JSONL writer, sanitiser, reader, retention | 3, 10 |
 | `app/admin` | Protected log viewer: search, timeline, workflow state, resume | 11 |
-| `tests` (e2e) | The definition-of-done scenario against embedded PostgreSQL, miniredis and fake EasyEcom/Uniware servers | 12 |
+| `tests` (e2e) | The definition-of-done scenario against embedded PostgreSQL, miniredis, a fake EasyEcom server and a stub vendor | 12, V0 |
 | `app/httpclient` | Resilient HTTP foundation: timeouts, backoff with jitter, Retry-After, size limits | 3 |
 | `app/integrations/easyecom` | EasyEcom client, DTOs, endpoints, mappers, webhook parser | 3 |
 | `app/domain` | Gluzo domain models (order, inventory, tracking) | 3 |
@@ -79,14 +81,18 @@ model only.
 | `app/webhook` | Platform-neutral event model, validation, intake handler | 3 |
 | `app/routing` | Database-backed integration routing scoped to the authenticated integration | 5 |
 | `app/workflow` | Workflow engine: state, actions, policies, registry, executor with per-action retry and resume | 6 |
-| `app/workflow/ordersync` | The ORDER_SYNC workflow and the Source/Destination adapter contracts | 6 |
+| `app/workflow/ordersync` | The ORDER_SYNC workflow, built on the `app/vendor` roles | 6, V0 |
 | `app/worker` | Queue consumer, recovery of interrupted and transiently failed runs, manual resume | 7 |
-| `app/integrations/dabur` | Dabur/Uniware OAuth client, DTOs, endpoints, mappers, destination adapter | 8 |
+| `app/vendor` | Vendor and origin role contracts, shared types, adapter registry | V0 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
+
+Phases 1–12 are the original build. `V0`… are phases of the
+[Vinculum plan](vinculum-integration-plan.md); each has a note under
+[phases/](phases/).
 
 ## Boundaries that must hold
 
-- Webhook handlers never call a destination platform synchronously.
+- Webhook handlers never call a vendor synchronously.
 - Mappers are pure: no HTTP, no database, no authentication.
 - Integration clients never orchestrate workflows.
 - Workflow actions never see HTTP routing or queue details.
@@ -169,8 +175,9 @@ headers keep working for platforms that can send them.
 ### ADR-010: External contracts are grounded in documentation or flagged
 
 No API path or field is invented. Where public documentation was readable
-(Uniware) the DTOs follow it exactly. Where it was not (EasyEcom's reference
-site is browser-rendered) the DTOs follow EasyEcom's support documentation
+(Vinculum publishes a live Swagger) the DTOs follow it exactly. Where it was
+not (EasyEcom's reference site is browser-rendered) the DTOs follow
+EasyEcom's support documentation
 and observed public payloads, and every unconfirmed name carries a `VERIFY`
 or `TODO(VERIFY)` marker listed in [integrations.md](integrations.md). The
 client, retry and mapping logic are independent of the exact names, so
@@ -197,6 +204,8 @@ acknowledged with 200/202; only malformed or unauthenticated requests are
 rejected, and infrastructure outages return 503 so the retry is useful.
 
 ### ADR-013: Workflows speak to platforms through Source and Destination contracts
+
+**Superseded by ADR-017.**
 
 The ORDER_SYNC actions call `Source.FetchOrder`, `Destination.PrepareOrder`,
 `Destination.SubmitOrder` and so on; they never see an EasyEcom or Uniware
@@ -238,6 +247,32 @@ fails while another handle (the admin viewer reading the same file) is open,
 so the rename is retried for up to a second. A redelivered job for a run that
 is already executing in the same process waits for it instead of bouncing
 through the queue, which would otherwise consume the job's delivery budget.
+
+### ADR-017: Vendor and origin roles replace the Source/Destination split
+
+Supersedes ADR-013.
+
+`Source`/`Destination` encoded one assumption: Gluzo owns the stock and
+pushes it outward. That held for a warehouse Gluzo controlled. It does not
+hold for a dropship vendor, which owns its stock and books its own dispatch,
+so stock and shipment data flow inward while orders still flow outward.
+
+`app/vendor` therefore splits the two sides into six narrow roles whose
+direction is fixed by the role: `OrderReceiver`, `StockProvider` and
+`FulfilmentProvider` on the vendor side; `Origin`, `StockSink` and
+`ShipmentSink` on the origin side. `Registry.Register` type-asserts an
+adapter against each role and files it under the ones it satisfies, so a
+partner that publishes stock by feed simply does not implement
+`StockProvider` instead of declaring a method it cannot serve. An adapter
+implementing no role is rejected at registration, and asking for a role a
+registered vendor lacks returns a different error from asking for an unknown
+vendor, because those are different operator mistakes.
+
+`app/vendor` imports only `app/domain/*` and `app/event`, never the workflow
+engine, which is why `Route` is its own type and `ordersync` converts
+`workflow.RouteInfo` at one boundary. ADR-013's other decisions — mapping as
+its own action, the prepared document stored opaquely, adding a partner being
+an adapter plus routes — carry over unchanged.
 
 ### ADR-008: Integration tests run against a real, embedded PostgreSQL
 

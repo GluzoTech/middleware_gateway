@@ -105,92 +105,69 @@ of both credentials (see ADR-009 in [architecture.md](architecture.md)).
 - Line total is `selling_price * suborder_quantity`.
 - Currency is assumed to be INR; the payload does not carry it.
 
-### Source adapter
+### Origin adapter
 
-`easyecom.Source` implements the workflow's `Source` contract. `FetchOrder`
-prefers the Get Order Details API and falls back to the webhook payload
-(which carries the same order representation) when the API cannot identify
-the order; transient API failures propagate so the engine retries them.
-`FetchInventory` queries each distinct SKU once. `FetchTracking` treats a
-permanent not-found as "no shipment yet".
+`easyecom.Source` implements `vendor.Origin`. `FetchOrder` prefers the Get
+Order Details API and falls back to the webhook payload (which carries the
+same order representation) when the API cannot identify the order; transient
+API failures propagate so the engine retries them.
 
-## Dabur (Uniware)
+It still carries `FetchInventory` and `FetchTracking` from the removed
+source/destination contracts. Neither is called by any workflow now: under dropship
+the vendor owns stock and dispatch, so both flow *into* EasyEcom through the
+`StockSink` and `ShipmentSink` roles instead. Phases 3 and 6 of the
+[Vinculum plan](vinculum-integration-plan.md) decide whether they are
+reworked into the sink adapter or deleted.
 
-Dabur runs Unicommerce Uniware. The adapter follows Unicommerce's public
-documentation exactly; what is tenant-specific is configuration.
+## Vendor side
 
-### Authentication
+No vendor adapter is implemented. The previous Uniware pipeline was removed in
+Phase 0 of the [Vinculum plan](vinculum-integration-plan.md); Vinculum
+eRetail is written in Phases 1–5. See [phases/phase-0.md](phases/phase-0.md).
 
-OAuth 2.0 password grant, as documented:
+### Roles, not a source/destination pair
 
-```text
-GET {DABUR_BASE_URL}/oauth/token?grant_type=password&client_id=my-trusted-client&username=…&password=…
-GET {DABUR_BASE_URL}/oauth/token?grant_type=refresh_token&client_id=my-trusted-client&refresh_token=…
-```
+`app/vendor` defines six role interfaces. The direction of data is fixed by
+the role, so an adapter cannot carry a method name that lies about which way
+data moves.
 
-The access token is cached until one minute before `expires_in`, renewed
-with the refresh token, and re-obtained with the password grant when the
-refresh fails. A 401 from any endpoint invalidates the cache and the call is
-repeated once. Because Uniware puts credentials in the query string, the
-HTTP client strips query strings from every transport error it reports.
+| Side | Role | Methods | Meaning |
+| --- | --- | --- | --- |
+| Vendor | `OrderReceiver` | `PrepareOrder`, `SubmitOrder` | accepts orders for fulfilment |
+| Vendor | `StockProvider` | `FetchStock` | owns stock for its SKUs; the gateway reads |
+| Vendor | `FulfilmentProvider` | `FetchShipments` | ships, so owns AWB, invoice, delivery status |
+| Origin | `Origin` | `FetchOrder` | customer-facing order record |
+| Origin | `StockSink` | `PushStock` | receives vendor stock as authoritative |
+| Origin | `ShipmentSink` | `PushShipment` | receives externally-booked dispatch |
 
-### Endpoints
+`vendor.Registry` indexes adapters by platform name and discovers capability
+by type assertion at registration, so adding a partner is one `Register`
+call and a partner may implement any subset of the roles. An adapter
+implementing none of them is rejected at start-up.
 
-| Operation | Method and path | Headers |
+### Contract rules every adapter must honour
+
+- `PrepareOrder` is pure. No network, no database. Its failures are
+  permanent and are never retried.
+- `SubmitOrder` is idempotent. Resume, redelivery and retry all call it more
+  than once for the same order; an order that already exists is reported
+  with `Created=false`, not raised as an error.
+- `PushStock` treats the quantity as authoritative and replaces what the
+  origin holds. It never adds, subtracts or reconciles against the origin's
+  own view.
+- `PushShipment` never moves a status backwards. A "delivered" notice can
+  arrive before the "shipped" one; a late arrival may correct the tracking
+  number but leaves a more advanced status alone.
+- No part of the gateway writes vendor stock back to the vendor.
+
+### Route references
+
+A route carries two location references and the distinction matters:
+
+| Field | Side | For Vinculum / EasyEcom |
 | --- | --- | --- |
-| `CreateSaleOrder` | `POST /services/rest/v1/oms/saleOrder/create` | `Authorization: bearer`, `Facility: <code>` |
-| `GetSaleOrder` | `POST /services/rest/v1/oms/saleorder/get` | `Authorization: bearer` |
-| `AdjustInventoryBulk` | `POST /services/rest/v1/inventory/adjust/bulk` | `Authorization: bearer`, `Facility: <code>` |
+| `VendorReference` | vendor | the three-character `orderLocation` |
+| `OriginReference` | origin | the `location_key` scoping stock writes |
 
-Uniware reports failure in the body (`successful: false` with `errors[]`)
-even on HTTP 200; the client converts that into a non-retryable external
-error carrying the first error code and description.
-
-### Facility selection
-
-The `Facility` header (and each item's `facilityCode`) comes from the
-route's `destination_reference`, falling back to `DABUR_DEFAULT_FACILITY`.
-Mapping "EasyEcom warehouse 12345 ships from Uniware facility DABUR-DEL" is
-therefore a route row, never code.
-
-### Order mapping
-
-| Uniware field | Source |
-| --- | --- |
-| `saleOrder.code` | domain `ExternalID` (EasyEcom `order_id`); makes creation idempotent |
-| `displayOrderCode` | `ReferenceCode`, falling back to the code |
-| `displayOrderDateTime` | `OrderedAt` as epoch milliseconds |
-| `cashOnDelivery`, `paymentInstrument` | `PaymentMode` (COD sends `CASH`) |
-| `totalPrepaidAmount` | `TotalAmount` for prepaid orders |
-| `totalShippingCharges`, `totalDiscount` | order-level charges |
-| `addresses[0]` (id `1`) | shipping address, with customer name/phone/email as fallback |
-| `saleOrderItems` | one item **per unit**: quantity 3 becomes codes `<line>-1`, `<line>-2`, `<line>-3` |
-| `channel`, `verificationRequired` | `DABUR_CHANNEL`, `DABUR_VERIFICATION_REQUIRED` |
-
-Uniware marks `name`, `addressLine1`, `city`, `state` and `phone` as
-required; an order missing any of them fails `MAP_ORDER` with a mapping
-error naming the field.
-
-### Idempotent submission
-
-If Uniware reports that the code already exists, the adapter looks the order
-up and reports it as existing rather than failing, so a resumed or
-redelivered run never creates a duplicate.
-
-### Inventory
-
-Stock levels become `REPLACE` adjustments of `GOOD_INVENTORY` on
-`DABUR_SHELF_CODE` (default `DEFAULT`). The per-adjustment outcomes are
-counted and partial failures are logged.
-
-### Confirm with Dabur before go-live
-
-- Tenant host (`DABUR_BASE_URL`), API user credentials, channel code and
-  facility codes.
-- Whether `saleOrder.code` should be the EasyEcom order id or the marketplace
-  reference.
-- The `displayOrderDateTime` format their tenant expects.
-- `verificationRequired` policy for gateway-created orders.
-- The exact error Uniware returns for a duplicate sale order code.
-- Inventory semantics (`REPLACE` absolute quantities versus `ADD`/`REMOVE`
-  deltas) and the receiving shelf.
+Both are configuration; neither appears in code. `OriginReference` has no
+routing column yet — Phase 3 adds it.

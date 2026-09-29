@@ -56,7 +56,7 @@ func newEnv(t *testing.T) *env {
 		t.Fatalf("NewFileRecorder: %v", err)
 	}
 	ctx := context.Background()
-	base := intlog.Entry{CorrelationID: "INT-1", Workflow: "ORDER_SYNC", Platform: "easyecom", Integration: "dabur", ExternalOrderID: "9876543"}
+	base := intlog.Entry{CorrelationID: "INT-1", Workflow: "ORDER_SYNC", Platform: "easyecom", Integration: "vinculum", ExternalOrderID: "9876543"}
 	entries := []intlog.Entry{
 		{Timestamp: ts, Action: intlog.ActionWebhookReceived, Status: intlog.StatusSuccess},
 		{Timestamp: ts.Add(time.Second), Action: "RESOLVE_INTEGRATION", Status: intlog.StatusSuccess, Attempt: 1},
@@ -77,7 +77,7 @@ func newEnv(t *testing.T) *env {
 	st.Actions = []workflow.ActionRecord{{Name: "RESOLVE_INTEGRATION", Status: workflow.ActionSucceeded, Attempt: 1}, {Name: "FETCH_ORDER", Status: workflow.ActionFailed, Attempt: 3, LastError: &apperror.Info{Category: apperror.ExternalAPI, Message: "503"}}}
 	st.CurrentAction, st.LastSuccessfulAction, st.NextAction = 1, "RESOLVE_INTEGRATION", "FETCH_ORDER"
 	st.LastError = st.Actions[1].LastError
-	st.Route = &workflow.RouteInfo{DestinationPlatform: "dabur", IntegrationName: "easyecom-dabur", RouteType: "warehouse_id", RouteValue: "5", DestinationReference: "DEL"}
+	st.Route = &workflow.RouteInfo{DestinationPlatform: "vinculum", IntegrationName: "easyecom-vinculum", RouteType: "warehouse_id", RouteValue: "5", DestinationReference: "DEL"}
 	st.SetResult(workflow.ResultDestinationOrderID, "SO-1")
 	_ = repo.Save(ctx, st)
 	done := workflow.NewState("ORDER_SYNC", event.Event{CorrelationID: "INT-3", Payload: []byte(`{}`)}, "job", ts)

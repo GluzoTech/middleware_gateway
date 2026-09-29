@@ -17,10 +17,10 @@ integration_routes  WHERE integration_id = <token's integration>
         │
         ▼
 Resolution {
-  IntegrationName:      easyecom-dabur
+  IntegrationName:      easyecom-vinculum
   SourcePlatform:       easyecom
-  DestinationPlatform:  dabur
-  Route.DestinationReference: DABUR-DEL   <- e.g. the Uniware facility code
+  DestinationPlatform:  vinculum
+  Route.DestinationReference: DEL   <- e.g. the vendor-side location code
 }
 ```
 
@@ -31,7 +31,7 @@ Resolution {
   only steer events into its own pipeline, and two integrations can map the
   same warehouse independently.
 - `destination_reference` carries the destination-side identifier for the
-  route, so "EasyEcom warehouse 12345 ships from Uniware facility DABUR-DEL"
+  route, so "EasyEcom warehouse 12345 is fulfilled from vendor location DEL"
   is configuration, not code.
 - Disabling a route pauses one warehouse; disabling the integration pauses
   the whole pipeline. Neither deletes configuration.
@@ -47,8 +47,8 @@ spot warehouses that need a route.
 ## Managing routes
 
 ```bash
-go run ./cmd/gatewayctl route add --integration easyecom-dabur --type warehouse_id --value 12345 --destination-ref DABUR-DEL
-go run ./cmd/gatewayctl route list --integration easyecom-dabur
+go run ./cmd/gatewayctl route add --integration easyecom-vinculum --type warehouse_id --value 12345 --destination-ref DEL
+go run ./cmd/gatewayctl route list --integration easyecom-vinculum
 go run ./cmd/gatewayctl route set-status --id <route id> --status disabled
 go run ./cmd/gatewayctl route remove --id <route id>
 ```
