@@ -89,12 +89,24 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
-// call performs an authenticated request and decodes the JSON body into out.
-// A 401 invalidates the cached JWT and the call is repeated once with a fresh
-// token, which covers token expiry and server-side revocation.
+// call performs an authenticated request against the process default
+// location.
 func (c *Client) call(ctx context.Context, req httpclient.Request, out any) error {
+	return c.callAs(ctx, "", req, out)
+}
+
+// callAs performs an authenticated request scoped to one EasyEcom location
+// and decodes the JSON body into out. A 401 invalidates that location's
+// cached JWT and the call is repeated once with a fresh token, which covers
+// token expiry and server-side revocation.
+//
+// The location is a per-call argument rather than client state because one
+// process writes to several locations. EasyEcom scopes the JWT to the
+// location it was issued for, so passing the wrong one here does not write
+// the wrong warehouse — it is rejected.
+func (c *Client) callAs(ctx context.Context, locationKey string, req httpclient.Request, out any) error {
 	for attempt := 0; attempt < 2; attempt++ {
-		token, err := c.tokens.Token(ctx)
+		token, err := c.tokens.Token(ctx, locationKey)
 		if err != nil {
 			return err
 		}
@@ -110,8 +122,10 @@ func (c *Client) call(ctx context.Context, req httpclient.Request, out any) erro
 		}
 		var aerr *apperror.Error
 		if attempt == 0 && errors.As(err, &aerr) && aerr.HTTPStatus == http.StatusUnauthorized {
-			c.logger.WarnContext(ctx, "easyecom rejected the JWT; refreshing", slog.String("operation", req.Operation))
-			c.tokens.Invalidate()
+			c.logger.WarnContext(ctx, "easyecom rejected the JWT; refreshing",
+				slog.String("operation", req.Operation),
+				slog.String("location", locationKey))
+			c.tokens.Invalidate(locationKey)
 			continue
 		}
 		return err

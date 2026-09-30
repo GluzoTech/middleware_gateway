@@ -50,13 +50,23 @@ func (k Key) String() string { return k.Type + "=" + k.Value }
 
 // Route is one configured mapping.
 type Route struct {
-	ID                   uuid.UUID
-	IntegrationID        uuid.UUID
-	Type                 string
-	Value                string
+	ID            uuid.UUID
+	IntegrationID uuid.UUID
+	Type          string
+	Value         string
+	// DestinationReference is the vendor-side location for this route, e.g.
+	// Vinculum's three-character orderLocation.
 	DestinationReference string
-	Status               string
-	CreatedAt            time.Time
+	// OriginReference is the origin-side location: for EasyEcom the
+	// location_key whose JWT is scoped to that location. Empty means the
+	// process default.
+	//
+	// The two are separate because they are different systems' names for
+	// different ends of the same pipeline, and conflating them would make a
+	// stock push authenticate for whichever one happened to be set.
+	OriginReference string
+	Status          string
+	CreatedAt       time.Time
 }
 
 // Resolution is the outcome of routing an event.

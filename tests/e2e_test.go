@@ -42,14 +42,17 @@ import (
 )
 
 const (
-	e2eOrderID       = "424242"
-	e2eWarehouse     = "777"
-	e2eLocation      = "BLR"
-	e2eVendor        = "vinculum"
-	e2eAdminToken    = "admin-e2e-token"
-	e2eEasyJWT       = "e2e-easyecom-jwt-token"
-	e2eEasyAPIKey    = "e2e-easyecom-api-key"
-	e2eWebhookOrders = `[{"order_id":424242,"invoice_id":"INV-E2E","reference_code":"REF-E2E","warehouse_id":777,"order_status":"Pending","customer_name":"Asha Verma","contact_num":"9876501234","address_line_1":"12 MG Road","city":"Pune","state":"Maharashtra","pin_code":"411001","total_amount":"250.00","payment_mode":"COD","order_items":[{"suborder_id":1,"sku":"BCPL-E2E","suborder_quantity":1,"selling_price":250}]}]`
+	e2eOrderID   = "424242"
+	e2eWarehouse = "777"
+	e2eLocation  = "BLR"
+	// The origin-side location the vendor's stock is written under. Separate
+	// from the vendor-side one because they name different ends of the route.
+	e2eOriginLocation = "bcpl-location-key"
+	e2eVendor         = "vinculum"
+	e2eAdminToken     = "admin-e2e-token"
+	e2eEasyJWT        = "e2e-easyecom-jwt-token"
+	e2eEasyAPIKey     = "e2e-easyecom-api-key"
+	e2eWebhookOrders  = `[{"order_id":424242,"invoice_id":"INV-E2E","reference_code":"REF-E2E","warehouse_id":777,"order_status":"Pending","customer_name":"Asha Verma","contact_num":"9876501234","address_line_1":"12 MG Road","city":"Pune","state":"Maharashtra","pin_code":"411001","total_amount":"250.00","payment_mode":"COD","order_items":[{"suborder_id":1,"sku":"BCPL-E2E","suborder_quantity":1,"selling_price":250}]}]`
 )
 
 // fakeEasyEcomAPI answers the calls the origin adapter makes.
@@ -198,7 +201,7 @@ func TestEndToEndOrderSync(t *testing.T) {
 		t.Fatalf("IssueToken: %v", err)
 	}
 	routes := routing.NewStore(pool)
-	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, e2eWarehouse, e2eLocation); err != nil {
+	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, e2eWarehouse, e2eLocation, e2eOriginLocation); err != nil {
 		t.Fatalf("AddRoute: %v", err)
 	}
 

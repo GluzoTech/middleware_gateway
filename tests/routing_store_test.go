@@ -34,20 +34,27 @@ func TestRoutingStore(t *testing.T) {
 		t.Fatalf("CreateIntegration other: %v", err)
 	}
 
-	route, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "12345", "DEL")
+	route, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "12345", "DEL", "bcpl-loc-key")
 	if err != nil {
 		t.Fatalf("AddRoute: %v", err)
 	}
 	if route.IntegrationID != integ.ID || route.Status != routing.StatusActive || route.DestinationReference != "DEL" {
 		t.Fatalf("unexpected route: %+v", route)
 	}
-	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "12345", ""); !errors.Is(err, routing.ErrAlreadyExists) {
+	// A route names both ends. The vendor-side reference selects the
+	// vendor's location; the origin-side one selects the EasyEcom location a
+	// stock push authenticates for, which is what keeps vendor stock out of
+	// Gluzo's own warehouse.
+	if route.OriginReference != "bcpl-loc-key" {
+		t.Fatalf("origin reference = %q, want bcpl-loc-key", route.OriginReference)
+	}
+	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "12345", "", ""); !errors.Is(err, routing.ErrAlreadyExists) {
 		t.Fatalf("duplicate route: err = %v", err)
 	}
-	if _, err := routes.AddRoute(ctx, "missing-"+suffix, routing.TypeWarehouse, "1", ""); !errors.Is(err, routing.ErrNotFound) {
+	if _, err := routes.AddRoute(ctx, "missing-"+suffix, routing.TypeWarehouse, "1", "", ""); !errors.Is(err, routing.ErrNotFound) {
 		t.Fatalf("missing integration: err = %v", err)
 	}
-	if _, err := routes.AddRoute(ctx, integ.Name, "", "1", ""); !errors.Is(err, routing.ErrInvalidArgument) {
+	if _, err := routes.AddRoute(ctx, integ.Name, "", "1", "", ""); !errors.Is(err, routing.ErrInvalidArgument) {
 		t.Fatalf("empty type: err = %v", err)
 	}
 
@@ -58,6 +65,22 @@ func TestRoutingStore(t *testing.T) {
 	}
 	if res.IntegrationID != integ.ID || res.IntegrationName != integ.Name || res.SourcePlatform != src.Name || res.DestinationPlatform != dst.Name || res.Route.DestinationReference != "DEL" {
 		t.Fatalf("unexpected resolution: %+v", res)
+	}
+	if res.Route.OriginReference != "bcpl-loc-key" {
+		t.Fatalf("resolution dropped the origin reference: %+v", res.Route)
+	}
+
+	// A route added without either reference resolves with both empty
+	// rather than with one standing in for the other.
+	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, "99999", "", ""); err != nil {
+		t.Fatalf("AddRoute without references: %v", err)
+	}
+	bare, err := routes.Resolve(ctx, integ.ID, routing.Key{Type: routing.TypeWarehouse, Value: "99999"})
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if bare.Route.DestinationReference != "" || bare.Route.OriginReference != "" {
+		t.Errorf("unset references came back as %+v", bare.Route)
 	}
 
 	if _, err := routes.Resolve(ctx, integ.ID, routing.Key{Type: routing.TypeWarehouse, Value: "unknown"}); !errors.Is(err, routing.ErrNoRoute) {
@@ -94,8 +117,22 @@ func TestRoutingStore(t *testing.T) {
 	}
 
 	list, err := routes.ListRoutes(ctx, integ.Name)
-	if err != nil || len(list) != 1 || list[0].ID != route.ID {
+	if err != nil || len(list) != 2 {
 		t.Fatalf("ListRoutes = %+v, %v", list, err)
+	}
+	// The listing carries both references, so an operator can see which
+	// location each end of a route points at without reading the database.
+	var listed *routing.Route
+	for i := range list {
+		if list[i].ID == route.ID {
+			listed = &list[i]
+		}
+	}
+	if listed == nil {
+		t.Fatalf("ListRoutes did not return the added route: %+v", list)
+	}
+	if listed.DestinationReference != "DEL" || listed.OriginReference != "bcpl-loc-key" {
+		t.Errorf("listed route lost a reference: %+v", *listed)
 	}
 	if err := routes.RemoveRoute(ctx, route.ID); err != nil {
 		t.Fatalf("RemoveRoute: %v", err)

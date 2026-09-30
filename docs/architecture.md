@@ -86,6 +86,7 @@ model only.
 | `app/vendor` | Vendor and origin role contracts, shared types, adapter registry | V0 |
 | `app/integrations/vinculum` | Vinculum eRetail client, DTOs, stock and dispatch read endpoints, mappers | V1 |
 | `app/scheduler` | Periodic job publisher: watermarked state, exclusive claim, Redis lock | V2 |
+| `app/skumap` | Gluzo SKU to vendor item code, both directions, with a safety buffer | V3 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
 
 Phases 1–12 are the original build. `V0`… are phases of the

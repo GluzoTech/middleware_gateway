@@ -20,7 +20,8 @@ Resolution {
   IntegrationName:      easyecom-vinculum
   SourcePlatform:       easyecom
   DestinationPlatform:  vinculum
-  Route.DestinationReference: DEL   <- e.g. the vendor-side location code
+  Route.DestinationReference: DEL                 <- the vendor-side location code
+  Route.OriginReference:      bcpl_location_key   <- the EasyEcom location stock is written under
 }
 ```
 
@@ -30,9 +31,15 @@ Resolution {
 - Resolution is **scoped to the authenticated integration**. A token can
   only steer events into its own pipeline, and two integrations can map the
   same warehouse independently.
-- `destination_reference` carries the destination-side identifier for the
-  route, so "EasyEcom warehouse 12345 is fulfilled from vendor location DEL"
-  is configuration, not code.
+- `destination_reference` carries the vendor-side identifier for the route,
+  so "EasyEcom warehouse 12345 is fulfilled from vendor location DEL" is
+  configuration, not code.
+- `origin_reference` carries the origin-side one: the EasyEcom `location_key`
+  a stock push authenticates for. The two are separate because they name
+  different ends of the same pipeline, and because the origin one is a
+  security boundary — EasyEcom scopes its JWT to a location, so
+  authenticating for BCPL's makes the gateway structurally incapable of
+  writing quantities into Gluzo's own warehouse.
 - Disabling a route pauses one warehouse; disabling the integration pauses
   the whole pipeline. Neither deletes configuration.
 
@@ -47,7 +54,7 @@ spot warehouses that need a route.
 ## Managing routes
 
 ```bash
-go run ./cmd/gatewayctl route add --integration easyecom-vinculum --type warehouse_id --value 12345 --destination-ref DEL
+go run ./cmd/gatewayctl route add --integration easyecom-vinculum --type warehouse_id --value 12345 --destination-ref DEL --origin-ref bcpl_location_key
 go run ./cmd/gatewayctl route list --integration easyecom-vinculum
 go run ./cmd/gatewayctl route set-status --id <route id> --status disabled
 go run ./cmd/gatewayctl route remove --id <route id>

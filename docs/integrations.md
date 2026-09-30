@@ -105,6 +105,47 @@ of both credentials (see ADR-009 in [architecture.md](architecture.md)).
 - Line total is `selling_price * suborder_quantity`.
 - Currency is assumed to be INR; the payload does not carry it.
 
+### Stock sink
+
+`easyecom.Sink` implements `vendor.StockSink`. It is a separate type from
+`Source` deliberately: `Source` reads the customer-facing order, `Sink` writes
+vendor-owned facts inward. One type carrying both would be a type whose method
+names disagree about which way data moves.
+
+| Operation | Method and path | Contract status |
+| --- | --- | --- |
+| `BulkInventoryUpdate` | `POST /bulkInventoryUpdate` | **Path unverified.** The Postman collection records the operation and its body, `{"skus":[{"sku","quantity"}]}`, but not its path. |
+
+Rules the sink holds to:
+
+- **Quantities are absolute.** They replace what EasyEcom holds. Nothing
+  reconciles them against EasyEcom's own view: the vendor is the source of
+  truth for these SKUs, and an origin applying its own arithmetic on top
+  produces drift nobody can trace.
+- **Values are clamped at 10,000 before sending.** EasyEcom clamps silently
+  and reports the clamped figure; capping here means the number sent is the
+  number stored, so the response can be read at face value.
+- **Large sets are split into batches of 500.** The documented limit is not
+  published (EasyEcom open item 9); the batch size is one constant.
+- **A level that cannot be sent is counted as a failure, not dropped.** A SKU
+  whose stock never reaches the storefront looks exactly like a SKU whose
+  stock did not change.
+
+### The location boundary
+
+`Route.OriginReference` selects the EasyEcom location a push authenticates
+for, and the token cache is keyed by location.
+
+This is the load-bearing part. EasyEcom issues a JWT scoped to one location,
+so a push for BCPL **cannot** write Gluzo's own quantities even if the SKU set
+were wrong — the platform rejects it. The guarantee comes from the platform
+rather than from the gateway being careful, which is the only kind of
+guarantee a code defect cannot undo.
+
+A route with no origin reference falls back to the process default and logs a
+warning, because a stock push landing in the default location is precisely the
+failure this design exists to prevent.
+
 ### Origin adapter
 
 `easyecom.Source` implements `vendor.Origin`. `FetchOrder` prefers the Get

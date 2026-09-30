@@ -1,6 +1,6 @@
 # Blockers and flagged decisions — feasibility
 
-30 September 2026. Companion to the
+Updated 30 September 2026, after Phase 3. Companion to the
 [integration plan](vinculum-integration-plan.md) and the phase notes under
 [phases/](phases/).
 
@@ -102,6 +102,20 @@ a day's work, and a permanently weaker guarantee.
 | B12 | Vinculum dispatch status values | BCPL | Keyword matching | Nothing | Unknown labels become `UNKNOWN`, raw text kept | One function |
 | B13 | `reqType`, `filterBy`, `fulfillmentLocation`, `status[]` | BCPL | Omitted | Nothing | Possibly over-broad sweeps | Configuration; no code change |
 | B14 | EasyEcom `getInventoryDetailsV2`, `Carriers/getTrackingDetails` | EasyEcom | Unverified | Nothing | Nothing — **unused under dropship** | Delete or rework in Phases 3, 6 |
+| B15 | Bulk Inventory Update's **path** | EasyEcom | `/bulkInventoryUpdate` | Phase 4 live | **Fails loud:** every push errors on the first call | One constant |
+| B16 | Bulk Inventory Update's per-SKU result shape | EasyEcom | Absent list = all accepted | Nothing | Partial failures reported as successes | One function |
+
+**On B15.** Added in Phase 3 and worth flagging clearly: the Postman
+collection records the bulk operation and its request body but **not its
+path**, so the path in code is a guess following the naming of the endpoints
+already in the package. It is the one unverified item that will stop Phase 4
+working outright — loudly, on the first call, with no risk to data. Ask for it
+in the same message as the rest.
+
+**On B16.** Less visible and therefore worth watching: if EasyEcom does report
+per-SKU failures in a shape we do not recognise, a partial rejection reads as
+a clean push. The sink logs every rejection it *does* recognise, so the first
+live run will show whether the shape matches.
 
 **On B10 and B11.** These are the two assumptions I am least comfortable
 having made, and both were made in the way that fails loudly rather than
@@ -196,7 +210,10 @@ more after Phase 2, which added a second concurrent subsystem.
 2. The `current_shipment_status_id` enumeration. *(B7)*
 3. Register BCPL's couriers so we can read their `companyCarrierId` values.
    *(B8)*
-4. Rate limits on the bulk inventory endpoint. *(B9)*
+4. Rate limits and the maximum batch size on the bulk inventory endpoint.
+   *(B9)*
+5. **The exact path of Bulk Inventory Update**, and the shape of its per-SKU
+   response. *(B15, B16 — needed before Phase 4 works at all)*
 
 ---
 
@@ -206,8 +223,8 @@ No phase is waiting on any answer above to be **written**.
 
 | Phase | Writable now | Live-testable now |
 |---|---|---|
-| 3 — SKU map, EasyEcom stock sink | Yes, against a fake | No (B3) |
-| 4 — `STOCK_SYNC` | Yes | No (B1, B2) |
+| 3 — SKU map, EasyEcom stock sink | **Done** | No (B3) |
+| 4 — `STOCK_SYNC` | Yes | No (B1, B2, B15) |
 | 5 — Orders to Vinculum | Yes | No (B4, B5) — **and must not run against BCPL production** |
 | 6 — `SHIPMENT_SYNC` | Yes | No (B7, B8) |
 | 7 — Reconciliation | Yes | Yes |

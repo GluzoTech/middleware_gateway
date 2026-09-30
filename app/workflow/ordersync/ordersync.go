@@ -138,6 +138,7 @@ func (w *orderSync) route(state *workflow.State) (vendor.OrderReceiver, vendor.R
 		RouteType:       state.Route.RouteType,
 		RouteValue:      state.Route.RouteValue,
 		VendorReference: state.Route.DestinationReference,
+		OriginReference: state.Route.OriginReference,
 	}
 	if err := r.Validate(); err != nil {
 		return nil, vendor.Route{}, apperror.Wrap(apperror.Workflow, "resolved route is incomplete", err)
@@ -179,6 +180,7 @@ func (w *orderSync) resolveIntegration(ctx context.Context, state *workflow.Stat
 		RouteType:            res.Route.Type,
 		RouteValue:           res.Route.Value,
 		DestinationReference: res.Route.DestinationReference,
+		OriginReference:      res.Route.OriginReference,
 	}
 	return nil
 }
