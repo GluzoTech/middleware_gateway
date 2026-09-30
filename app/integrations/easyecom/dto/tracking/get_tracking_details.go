@@ -1,10 +1,11 @@
 // Package tracking holds the EasyEcom shipment tracking contracts.
 //
 // TODO(VERIFY): the tracking contract could not be confirmed against the
-// EasyEcom API reference, which is not machine-readable. The request
-// parameters and response field names below follow EasyEcom's public naming
-// conventions and MUST be checked against api-docs.easyecom.io before the
-// tracking action is relied upon in production.
+// EasyEcom API reference, which is not machine-readable, and the Postman
+// collection read on 29 September 2026 covers the shipment write endpoints
+// rather than this read. The names below therefore remain unverified.
+// Nothing calls them: under dropship BCPL books the courier and the gateway
+// pushes the result into EasyEcom.
 package tracking
 
 import (

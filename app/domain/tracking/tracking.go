@@ -37,6 +37,14 @@ type Shipment struct {
 	SourceStatus   string
 	ShippedAt      *time.Time
 	UpdatedAt      time.Time
+	// InvoiceNumber is the invoice the vendor raised for this package. Under
+	// dropship the vendor invoices the customer under its own registration,
+	// so the number originates outside Gluzo.
+	InvoiceNumber string
+	// SellerGSTIN is the tax registration the package was invoiced under.
+	// It is the vendor's, not Gluzo's, and is carried so the origin platform
+	// can present the correct seller on the customer's invoice.
+	SellerGSTIN string
 }
 
 // Validate reports every invariant the shipment violates.

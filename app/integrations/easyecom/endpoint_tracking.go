@@ -10,8 +10,14 @@ import (
 )
 
 // trackingDetailsPath is the shipment tracking endpoint.
-// TODO(VERIFY): confirm the path, parameters and response fields against
-// api-docs.easyecom.io before relying on tracking synchronisation.
+//
+// TODO(VERIFY): still unconfirmed, and now unused. Reviewed against the
+// EasyEcom Postman collection on 29 September 2026: the collection documents
+// the shipment *write* endpoints (AssignShipmentDetails, updateTrackingStatus),
+// not this read. Under dropship EasyEcom holds no tracking until the gateway
+// pushes what BCPL booked, so reading it back would return nothing. Phase 6
+// of the Vinculum plan decides whether it is reworked into the sink adapter
+// or deleted.
 const trackingDetailsPath = "/Carriers/getTrackingDetails"
 
 // GetTrackingDetails fetches tracking information for a shipment.

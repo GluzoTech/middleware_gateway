@@ -86,6 +86,27 @@ func TestLoadFrom(t *testing.T) {
 			},
 		},
 		{
+			name: "vinculum settings are read",
+			env: merge(base, map[string]string{
+				"VINCULUM_API_OWNER":       "gluzo",
+				"VINCULUM_API_KEY":         "vk",
+				"VINCULUM_LOCATION":        "DEL",
+				"VINCULUM_SELLABLE_BUCKET": "Good",
+				"VINCULUM_TIMEOUT":         "30s",
+			}),
+			check: func(t *testing.T, cfg *config.Config) {
+				v := cfg.Vinculum
+				if v.BaseURL != "https://erp.vineretail.com" || v.APIOwner != "gluzo" || v.APIKey != "vk" || v.Location != "DEL" || v.SellableBucket != "Good" || v.Timeout != 30*time.Second {
+					t.Errorf("vinculum config = %+v", v)
+				}
+			},
+		},
+		{
+			name:    "vinculum timeout must be positive",
+			env:     merge(base, map[string]string{"VINCULUM_TIMEOUT": "0s"}),
+			wantErr: "VINCULUM_TIMEOUT must be a positive duration",
+		},
+		{
 			name:    "worker enabled must be boolean",
 			env:     merge(base, map[string]string{"WORKER_ENABLED": "maybe"}),
 			wantErr: "WORKER_ENABLED: expected true or false",

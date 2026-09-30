@@ -121,9 +121,10 @@ reworked into the sink adapter or deleted.
 
 ## Vendor side
 
-No vendor adapter is implemented. The previous Uniware pipeline was removed in
-Phase 0 of the [Vinculum plan](vinculum-integration-plan.md); Vinculum
-eRetail is written in Phases 1–5. See [phases/phase-0.md](phases/phase-0.md).
+No adapter implements the vendor roles yet. The previous Uniware pipeline was
+removed in Phase 0 of the [Vinculum plan](vinculum-integration-plan.md);
+Vinculum eRetail's client and read paths arrived in Phase 1. See
+[phases/](phases/).
 
 ### Roles, not a source/destination pair
 
@@ -171,3 +172,84 @@ A route carries two location references and the distinction matters:
 
 Both are configuration; neither appears in code. `OriginReference` has no
 routing column yet — Phase 3 adds it.
+
+## Vinculum (eRetail)
+
+BCPL runs Vinculum eRetail. The adapter follows the live specification read on
+29 September 2026; what is tenant-specific is configuration. Phase 1 built the
+client, the two read endpoints and their mappers. The vendor roles themselves
+are Phases 4 and 5.
+
+### Authentication
+
+Two static headers on every call:
+
+| Header | Value |
+| --- | --- |
+| `ApiOwner` | `VINCULUM_API_OWNER` |
+| `ApiKey` | `VINCULUM_API_KEY` |
+
+No token exchange, no refresh, no expiry. The client therefore has no token
+source and no retry-on-401 loop: the credentials are static, so a 401 means
+they are wrong and asking again would only be told the same thing.
+
+### Endpoints
+
+| Operation | Method and path | Contract status |
+| --- | --- | --- |
+| `GetWhInventory` | `POST /RestWS/api/eretail/v4/stock/getWhInventory` | Field names per the published specification |
+| `ShipmentDetail` | `POST /RestWS/api/eretail/v1/order/shipmentDetail` | Field names per the published specification |
+
+Both page. `hasMore` drives the stock sweep, `pageNumber` the shipment sweep,
+and each `FetchAll*` helper stops at a page ceiling rather than trusting a
+`hasMore` that never goes false. A stock sweep that ends early is reported as
+an error, not returned short: half a catalogue, taken as the whole, would
+zero out the other half at the storefront.
+
+### Response handling
+
+Vinculum wraps responses in `responseCode`/`responseMessage`. A business
+rejection arrives as HTTP 200 with a non-zero `responseCode`, so the envelope
+is checked separately from the status; a caller that checked only the status
+would read a rejection as a successful empty page. Envelope errors are
+**non-retryable** — they describe a decision about the request. Transient
+conditions arrive as 5xx and are retried by the HTTP client.
+
+Numbers arrive as JSON numbers in some fields and as quoted strings in
+others, so the `dto.Flex*` types accept both.
+
+### Unverified, and why
+
+| Item | Status |
+| --- | --- |
+| `responseCode` success value | `0` assumed. The specification names the field without enumerating values. Failing safe: a wrong assumption reports every call as an error rather than swallowing failures. |
+| Request date format | `2006-01-02 15:04:05`. The specification documents the date parameters without their format. One constant, `dto.RequestTimeLayout`. |
+| Response date formats | Several layouts are tried in turn, because the format of a given field is not stated and refusing a shipment over a date format loses tracking the customer is waiting for. |
+| Dispatch status values | Normalised by keyword. An unrecognised label becomes `UNKNOWN` and keeps its original text in `SourceStatus`, so nothing is silently reclassified. |
+| `reqType`, `filterBy`, `fulfillmentLocation`, `status[]` | Documented parameters with no published value set. Passed through when set, omitted when not, so a value BCPL supply later needs no code change. |
+| Sellable `bucket` value | BCPL open item 2. Blank accepts every bucket, which is right for reading and wrong for pushing. Phase 4 requires it. |
+| `qty` versus `committedQty` | Assumption A1. See below. |
+
+Test payloads under `app/integrations/vinculum/mapper/testdata/` are built
+from the specification, not captured from BCPL: no test credentials have been
+issued (open item 5).
+
+### The sellable quantity, and why it is one expression
+
+`mapper.SellableQuantity` is assumption A1 of the plan: sellable is `qty`
+minus `committedQty`. BCPL have indicated `committedQty` may itself be the net
+figure, in which case the function becomes `return committed`.
+
+It is deliberately one expression called from one place. Getting it wrong is
+expensive in production — systematic oversell if too high, a catalogue reading
+as out of stock if too low — so it must be observed rather than assumed. The
+observation: read both values for a SKU, place one order for one unit, read
+again. If `committedQty` rises, A1 holds.
+
+### Confirm with BCPL before go-live
+
+- Which `bucket` value is sellable stock.
+- Whether `committedQty` rises or falls when an order is placed (A1).
+- The `orderLocation` code for BCPL's warehouse.
+- The date format their tenant expects, and the `responseCode` success value.
+- Test-environment `ApiOwner`/`ApiKey` and seeded SKUs.

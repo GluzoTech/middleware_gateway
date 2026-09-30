@@ -10,8 +10,14 @@ import (
 )
 
 // inventoryDetailsPath is the Get Inventory Details V2 endpoint.
-// TODO(VERIFY): confirm the path, parameters and response fields against
-// api-docs.easyecom.io before enabling inventory synchronisation.
+//
+// TODO(VERIFY): still unconfirmed, and now unused. Reviewed against the
+// EasyEcom Postman collection on 29 September 2026: the collection documents
+// the inventory *write* endpoints (Update Inventory, Bulk Inventory Update),
+// not this read. Under dropship the gateway does not read EasyEcom stock at
+// all — the vendor owns it — so no workflow calls this. Phase 3 of the
+// Vinculum plan decides whether it is reworked into the sink adapter or
+// deleted; do not enable it in the meantime.
 const inventoryDetailsPath = "/getInventoryDetailsV2"
 
 // GetInventoryDetails fetches the stock position of one SKU.

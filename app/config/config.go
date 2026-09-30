@@ -35,6 +35,7 @@ type Config struct {
 	Worker   Worker
 	Admin    Admin
 	EasyEcom EasyEcom
+	Vinculum Vinculum
 }
 
 // Admin protects the operator endpoints. An empty token leaves them
@@ -78,6 +79,27 @@ type EasyEcom struct {
 	Password    string
 	LocationKey string
 	Timeout     time.Duration
+}
+
+// Vinculum holds credentials for outbound Vinculum eRetail calls.
+//
+// Vinculum authenticates with two static headers and issues no token, so
+// there is nothing to refresh and nothing to cache. Location is the default
+// three-character orderLocation used when a route carries no vendor
+// reference; SellableBucket names the stock bucket the storefront may sell
+// from. Both are deployment configuration, never code.
+//
+// Presence is validated when the Vinculum client is built, so a process that
+// only receives webhooks can start without any of it.
+type Vinculum struct {
+	BaseURL  string
+	APIOwner string
+	APIKey   string
+
+	Location       string
+	SellableBucket string
+
+	Timeout time.Duration
 }
 
 // App holds process-level settings.
@@ -194,6 +216,14 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			LocationKey: r.str("EASYECOM_LOCATION_KEY", ""),
 			Timeout:     r.duration("EASYECOM_TIMEOUT", 15*time.Second),
 		},
+		Vinculum: Vinculum{
+			BaseURL:        r.str("VINCULUM_BASE_URL", "https://erp.vineretail.com"),
+			APIOwner:       r.str("VINCULUM_API_OWNER", ""),
+			APIKey:         r.str("VINCULUM_API_KEY", ""),
+			Location:       r.str("VINCULUM_LOCATION", ""),
+			SellableBucket: r.str("VINCULUM_SELLABLE_BUCKET", ""),
+			Timeout:        r.duration("VINCULUM_TIMEOUT", 20*time.Second),
+		},
 	}
 
 	if err := r.err(); err != nil {
@@ -269,6 +299,7 @@ func (c *Config) Validate() error {
 		{"DATABASE_CONNECT_TIMEOUT", c.Database.ConnectTimeout},
 		{"REDIS_CONNECT_TIMEOUT", c.Redis.ConnectTimeout},
 		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
+		{"VINCULUM_TIMEOUT", c.Vinculum.Timeout},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
 		{"LOG_RETENTION_INTERVAL", c.Storage.LogRetentionInterval},

@@ -41,6 +41,11 @@ secret manager. Never commit `.env`.
 | `EASYECOM_JWT_TOKEN` | | Pre-issued JWT (alternative to login) |
 | `EASYECOM_EMAIL`, `EASYECOM_PASSWORD`, `EASYECOM_LOCATION_KEY` | | Login credentials used to obtain a JWT |
 | `EASYECOM_TIMEOUT` | `15s` | Per-attempt timeout for EasyEcom calls |
+| `VINCULUM_BASE_URL` | `https://erp.vineretail.com` | Vinculum eRetail host |
+| `VINCULUM_API_OWNER`, `VINCULUM_API_KEY` | | The two static headers every Vinculum call carries |
+| `VINCULUM_LOCATION` | | Default three-character `orderLocation`; a route's vendor reference overrides it |
+| `VINCULUM_SELLABLE_BUCKET` | | Stock bucket the storefront may sell from; blank accepts every bucket |
+| `VINCULUM_TIMEOUT` | `20s` | Per-attempt timeout for Vinculum calls |
 | `WORKER_ENABLED` | `true` | Run the job worker in this process; `false` gives an intake-only instance |
 | `WORKER_CONCURRENCY` | `4` | Jobs processed concurrently |
 | `WORKER_MAX_AUTO_RESUMES` | `3` | Automatic resumes of a failed run with a transient error |
@@ -48,8 +53,9 @@ secret manager. Never commit `.env`.
 | `WORKER_STALE_RUNNING_AFTER` | `10m` | Age after which a running run is treated as abandoned by a periodic scan |
 | `WORKER_RETRY_FAILED_AFTER` | `1m` | Cooling period before a transient failure is resumed |
 
-No vendor is implemented yet, so no vendor variables exist; the `VINCULUM_*`
-block in `.env.example` is a commented placeholder for Phase 1.
+The Vinculum client reads stock and dispatch records. No workflow calls it
+yet, so the `VINCULUM_*` variables may be left blank; the client validates
+them only when it is built.
 
 When the worker is enabled, EasyEcom credentials are required and validated
 at startup. Run intake-only instances (`WORKER_ENABLED=false`) without them.

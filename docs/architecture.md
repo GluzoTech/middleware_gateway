@@ -84,6 +84,7 @@ model only.
 | `app/workflow/ordersync` | The ORDER_SYNC workflow, built on the `app/vendor` roles | 6, V0 |
 | `app/worker` | Queue consumer, recovery of interrupted and transiently failed runs, manual resume | 7 |
 | `app/vendor` | Vendor and origin role contracts, shared types, adapter registry | V0 |
+| `app/integrations/vinculum` | Vinculum eRetail client, DTOs, stock and dispatch read endpoints, mappers | V1 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
 
 Phases 1–12 are the original build. `V0`… are phases of the
