@@ -92,6 +92,7 @@ model only.
 | `app/couriermap` | Vendor carrier name to the origin's carrier identifier | V6 |
 | `app/shipmentstate` | The furthest dispatch state pushed per package | V6 |
 | `app/workflow/shipmentsync` | The SHIPMENT_SYNC workflow and its scheduled job | V6 |
+| `app/reconcile` | Finds runs that stopped progressing; reports, never acts | V7 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
 
 Phases 1–12 are the original build. `V0`… are phases of the

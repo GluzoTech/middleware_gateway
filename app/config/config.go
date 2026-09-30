@@ -70,6 +70,16 @@ type Scheduler struct {
 	// a backlog after an outage drains in chunks.
 	ShipmentInterval  time.Duration
 	ShipmentMaxWindow time.Duration
+
+	// ReconcileInterval is how often the gateway looks for work it has
+	// stopped making progress on, and ReconcileThreshold is how long a run
+	// may sit untouched before it is reported.
+	//
+	// The threshold must exceed the worker's retry and recovery intervals,
+	// or every run in ordinary retry would be reported as stuck and the
+	// report would be worthless.
+	ReconcileInterval  time.Duration
+	ReconcileThreshold time.Duration
 }
 
 // Admin protects the operator endpoints. An empty token leaves them
@@ -280,6 +290,9 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 
 			ShipmentInterval:  r.duration("SHIPMENT_SYNC_INTERVAL", 15*time.Minute),
 			ShipmentMaxWindow: r.duration("SHIPMENT_SYNC_MAX_WINDOW", 24*time.Hour),
+
+			ReconcileInterval:  r.duration("RECONCILE_INTERVAL", time.Hour),
+			ReconcileThreshold: r.duration("RECONCILE_THRESHOLD", 30*time.Minute),
 		},
 		Vinculum: Vinculum{
 			BaseURL:        r.str("VINCULUM_BASE_URL", "https://erp.vineretail.com"),
@@ -359,6 +372,11 @@ func (c *Config) Validate() error {
 	if c.Worker.MaxAutoResumes < 0 {
 		errs = append(errs, errors.New("WORKER_MAX_AUTO_RESUMES must not be negative"))
 	}
+	if c.Scheduler.ReconcileThreshold > 0 && c.Scheduler.ReconcileThreshold <= c.Worker.RetryFailedAfter {
+		// Otherwise every run waiting for its ordinary auto-resume is
+		// reported as stuck, and an operator learns to ignore the report.
+		errs = append(errs, errors.New("RECONCILE_THRESHOLD must be longer than WORKER_RETRY_FAILED_AFTER"))
+	}
 
 	durations := []struct {
 		name  string
@@ -380,6 +398,8 @@ func (c *Config) Validate() error {
 		{"STOCK_SYNC_FULL_INTERVAL", c.Scheduler.StockFullInterval},
 		{"SHIPMENT_SYNC_INTERVAL", c.Scheduler.ShipmentInterval},
 		{"SHIPMENT_SYNC_MAX_WINDOW", c.Scheduler.ShipmentMaxWindow},
+		{"RECONCILE_INTERVAL", c.Scheduler.ReconcileInterval},
+		{"RECONCILE_THRESHOLD", c.Scheduler.ReconcileThreshold},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
 		{"LOG_RETENTION_INTERVAL", c.Storage.LogRetentionInterval},

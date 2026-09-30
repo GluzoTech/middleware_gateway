@@ -56,6 +56,8 @@ secret manager. Never commit `.env`.
 | `STOCK_SYNC_FULL_INTERVAL` | `24h` | How often every SKU is pushed, ignoring `inventory_state`, to repair drift |
 | `SHIPMENT_SYNC_INTERVAL` | `15m` | How often dispatch records are read from the vendor |
 | `SHIPMENT_SYNC_MAX_WINDOW` | `24h` | Cap on one run's period, so a backlog drains in chunks |
+| `RECONCILE_INTERVAL` | `1h` | How often to look for runs that stopped progressing |
+| `RECONCILE_THRESHOLD` | `30m` | How long a run may sit untouched before it is reported; must exceed `WORKER_RETRY_FAILED_AFTER` |
 | `EASYECOM_SHIPMENT_STATUS_IDS` | | Delivery statuses as EasyEcom numbers them (`SHIPPED=3,DELIVERED=7`). Unset statuses are not pushed rather than guessed |
 | `WORKER_ENABLED` | `true` | Run the job worker in this process; `false` gives an intake-only instance |
 | `WORKER_CONCURRENCY` | `4` | Jobs processed concurrently |

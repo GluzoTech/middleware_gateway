@@ -34,6 +34,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/inventorystate"
 	"github.com/gluzo/integration-gateway/app/logging"
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
+	"github.com/gluzo/integration-gateway/app/reconcile"
 	"github.com/gluzo/integration-gateway/app/routing"
 	"github.com/gluzo/integration-gateway/app/scheduler"
 	"github.com/gluzo/integration-gateway/app/shipmentstate"
@@ -167,6 +168,18 @@ func run() error {
 		return err
 	})
 
+	// Reconciliation finds work nothing else noticed: a run that failed
+	// permanently, one whose worker died, a vendor rejection nobody looked
+	// at. It reports and never acts — resuming a permanent failure would
+	// hide the pattern it exists to reveal.
+	scanner, err := reconcile.NewScanner(stateRepo, reconcile.Options{
+		Threshold:      cfg.Scheduler.ReconcileThreshold,
+		MaxAutoResumes: cfg.Worker.MaxAutoResumes,
+	})
+	if err != nil {
+		return err
+	}
+
 	// Periodic work — stock and dispatch sweeps — enters the same queue as a
 	// webhook event, so it travels the same worker, retry, resume and
 	// execution-log path. Nothing bypasses the log.
@@ -204,6 +217,16 @@ func run() error {
 					VendorPlatform: vinculum.PlatformName,
 				})},
 			}
+			// Reconciliation needs no workflow: it reads local state and
+			// produces a report, so there is nothing for a worker to run.
+			// It goes through the scheduler only so that several replicas
+			// do not each raise the same alert.
+			if err := periodic.Register(ctx, reconcile.Job(
+				reconcile.NewAlerter(scanner, recorder, logger),
+				cfg.Scheduler.ReconcileInterval,
+			)); err != nil {
+				return err
+			}
 			for workflowName, jobs := range periodicJobs {
 				if _, registered := registry.ByName(workflowName); !registered {
 					// Publishing work no worker can execute would fill the
@@ -229,7 +252,8 @@ func run() error {
 		if jobWorker != nil {
 			resumer = jobWorker
 		}
-		adminHandler, err = admin.NewHandler(intlog.NewReader(cfg.Storage.LogDirectory), stateRepo, resumer, logger)
+		adminHandler, err = admin.NewHandler(intlog.NewReader(cfg.Storage.LogDirectory), stateRepo, resumer, logger,
+			admin.WithScanner(scanner))
 		if err != nil {
 			return err
 		}

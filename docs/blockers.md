@@ -249,7 +249,7 @@ No phase is waiting on any answer above to be **written**.
 | 4 — `STOCK_SYNC` | **Done** | No (B1, B2, B15) |
 | 5 — Orders to Vinculum | **Done** | No (B4, B5, B17) — **and must not run against BCPL production** |
 | 6 — `SHIPMENT_SYNC` | **Done** | No (B7, B8, B19) |
-| 7 — Reconciliation | Yes | Yes |
+| 7 — Reconciliation | **Done** | Yes |
 
 The pattern that makes this possible is the same one used in Phases 0 to 2:
 every unknown is isolated behind one expression, one constant, one
@@ -259,3 +259,26 @@ building ahead of the answers is the cheaper order, not the reckless one.
 
 The one thing that would change this judgement is a **no** on B3. That is
 architectural, and it is worth asking about first.
+
+---
+
+## 7. Where this now stands
+
+**All eight phases (0–7) are implemented, tested and committed.** Nothing in
+the plan is waiting on code.
+
+What is waiting is the answers above. Ranked by what they cost to get wrong:
+
+1. **B17** — the `ship*` field names. The only guess that fails silently.
+2. **B1, B2** — the quantity rule and the sellable bucket, before any stock is
+   published. Both silent if wrong; both one line.
+3. **B15, B19** — three endpoint paths. Loud, and they stop a feature dead.
+4. **B7, B8** — the status enumeration and carrier registration. Tracking
+   numbers reach customers without them; delivery status does not.
+5. Everything else is configuration.
+
+One item is not on the list above because it is ours, not theirs: **`go test
+-race` has never run on this codebase** (Windows, no cgo). The concurrent
+surface is now the worker, the scheduler, the per-vendor rate limiter and four
+state stores. A single run on a Linux CI runner is the cheapest remaining
+assurance in the project, and the one I would do first.

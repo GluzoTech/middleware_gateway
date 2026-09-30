@@ -1,0 +1,43 @@
+{{template "head" "Reconciliation"}}
+<p><a href="/admin/logs">← Search</a></p>
+<h1>Runs that are not progressing</h1>
+<p class="muted">
+  Anything active and untouched for {{.View.Threshold}}. Finding nothing is the
+  expected result.
+</p>
+
+{{if .View.Findings}}
+<p class="{{if .View.Summary.NeedingAction}}problem{{else}}muted{{end}}">
+  {{.View.Summary.Total}} stuck · <strong>{{.View.Summary.NeedingAction}} need an operator</strong> ·
+  oldest {{.View.OldestStuckFor}}
+</p>
+<div class="wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Stuck for</th><th>Reason</th><th>Workflow</th><th>Stopped at</th>
+      <th>Order</th><th>Pipeline</th><th>Vendor said</th><th></th>
+    </tr>
+  </thead>
+  <tbody>
+  {{range .View.Findings}}
+  <tr>
+    <td class="{{if .NeedsOperator}}bad{{else}}muted{{end}}">{{.StuckForText}}</td>
+    <td class="{{if .NeedsOperator}}bad{{else}}muted{{end}}">{{.Reason}}</td>
+    <td>{{.Workflow}} <span class="badge">{{.Status}}</span>{{if .ResumeCount}} · resumed {{.ResumeCount}}×{{end}}</td>
+    <td>{{.Action}}</td>
+    <td>{{.ExternalOrderID}}</td>
+    <td>{{.IntegrationName}}{{if .VendorPlatform}} → {{.VendorPlatform}}{{end}}</td>
+    <td class="wrapcell">
+      {{- with .VendorMessage}}{{.}}{{else}}{{with .LastError}}<span class="badge">{{.Category}}</span> {{.Message}}{{end}}{{end -}}
+    </td>
+    <td><a href="/admin/logs/{{.CorrelationID}}">timeline</a></td>
+  </tr>
+  {{end}}
+  </tbody>
+</table>
+</div>
+{{else}}
+<p class="ok">Nothing is stuck.</p>
+{{end}}
+{{template "foot"}}

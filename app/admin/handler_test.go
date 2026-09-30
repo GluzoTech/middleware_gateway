@@ -21,6 +21,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/httpserver/middleware"
 	"github.com/gluzo/integration-gateway/app/intlog"
+	"github.com/gluzo/integration-gateway/app/reconcile"
 	"github.com/gluzo/integration-gateway/app/workflow"
 	"github.com/gluzo/integration-gateway/app/workflowstate"
 )
@@ -279,4 +280,83 @@ func TestResumeUnavailableWithoutWorker(t *testing.T) {
 		t.Fatal("nil reader accepted")
 	}
 	_ = errors.New // keep errors imported for future assertions
+}
+
+// The Phase 7 exit criterion, at the layer the criterion names: a stuck order
+// must actually appear in the admin viewer.
+func TestReconcileViewListsStuckRuns(t *testing.T) {
+	ctx := context.Background()
+	repo := workflowstate.NewMemoryRepository()
+	stuck := workflow.NewState("ORDER_SYNC", event.Event{
+		CorrelationID: "INT-STUCK", ExternalOrderID: "9876543", Payload: []byte(`{}`),
+	}, "job", time.Now().Add(-2*time.Hour))
+	stuck.Status = workflow.StatusFailed
+	stuck.NextAction = "SUBMIT_VENDOR_ORDER"
+	stuck.UpdatedAt = time.Now().Add(-2 * time.Hour)
+	stuck.LastError = &apperror.Info{
+		Category: apperror.ExternalAPI, Message: "vinculum rejected the request",
+		ExternalCode: "120", ExternalMessage: "location is closed for dispatch",
+	}
+	stuck.Route = &workflow.RouteInfo{DestinationPlatform: "vinculum", IntegrationName: "easyecom-vinculum"}
+	if err := repo.Save(ctx, stuck); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	scanner, err := reconcile.NewScanner(repo, reconcile.Options{Threshold: 30 * time.Minute, MaxAutoResumes: 3})
+	if err != nil {
+		t.Fatalf("NewScanner: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h, err := admin.NewHandler(intlog.NewReader(t.TempDir()), repo, nil, logger, admin.WithScanner(scanner))
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	r := gin.New()
+	r.Use(middleware.Correlation())
+	h.Register(r.Group("/admin", auth.RequireAdminToken(adminToken, logger)))
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/reconcile", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"INT-STUCK",
+		"SUBMIT_VENDOR_ORDER",
+		"PERMANENT_FAILURE",
+		// The vendor's own words reach the page: "the order did not go
+		// through" is not actionable, this is.
+		"location is closed for dispatch",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the page does not mention %q", want)
+		}
+	}
+}
+
+// Without a scanner the route must say so rather than render an empty page,
+// which would read as "nothing is stuck".
+func TestReconcileWithoutAScannerIsUnavailable(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	h, err := admin.NewHandler(intlog.NewReader(t.TempDir()), workflowstate.NewMemoryRepository(), nil, logger)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	r := gin.New()
+	r.Use(middleware.Correlation())
+	h.Register(r.Group("/admin", auth.RequireAdminToken(adminToken, logger)))
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/reconcile", nil)
+	req.Header.Set("Authorization", "Bearer "+adminToken)
+	rec := httptest.NewRecorder()
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503", rec.Code)
+	}
 }
