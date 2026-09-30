@@ -49,6 +49,8 @@ secret manager. Never commit `.env`.
 | `SCHEDULER_ENABLED` | `true` | Publish periodic work from this instance |
 | `SCHEDULER_POLL_INTERVAL` | `30s` | How often due jobs are looked for; not a job's own interval |
 | `SCHEDULER_LOCK_TTL` | `5m` | How long a run holds its job lock; must exceed a normal run |
+| `STOCK_SYNC_INTERVAL` | `15m` | How often changed vendor stock is pushed to EasyEcom |
+| `STOCK_SYNC_FULL_INTERVAL` | `24h` | How often every SKU is pushed, ignoring `inventory_state`, to repair drift |
 | `WORKER_ENABLED` | `true` | Run the job worker in this process; `false` gives an intake-only instance |
 | `WORKER_CONCURRENCY` | `4` | Jobs processed concurrently |
 | `WORKER_MAX_AUTO_RESUMES` | `3` | Automatic resumes of a failed run with a transient error |

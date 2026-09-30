@@ -87,6 +87,8 @@ model only.
 | `app/integrations/vinculum` | Vinculum eRetail client, DTOs, stock and dispatch read endpoints, mappers | V1 |
 | `app/scheduler` | Periodic job publisher: watermarked state, exclusive claim, Redis lock | V2 |
 | `app/skumap` | Gluzo SKU to vendor item code, both directions, with a safety buffer | V3 |
+| `app/inventorystate` | What was last pushed to the origin, per SKU and origin location | V4 |
+| `app/workflow/stocksync` | The STOCK_SYNC workflow and its two scheduled jobs | V4 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
 
 Phases 1–12 are the original build. `V0`… are phases of the

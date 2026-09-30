@@ -60,10 +60,11 @@ in-transit stock as sellable. The test payload deliberately includes a
 
 **Blast radius of the fix:** one environment variable. No code.
 
-**Recommendation:** make Phase 4 **refuse to start** if the bucket is unset,
-rather than defaulting. A blank that means "everything" is fine in a read-only
-phase and is a trap in a writing one. Flagged now so Phase 4 is written that
-way from the start.
+**Recommendation, implemented in Phase 4:** the Vinculum adapter refuses to
+start when the bucket is unset, rather than defaulting. A blank that means
+"everything" is fine in a read-only phase and is a trap in a writing one, so
+an unset value now stops the deployment instead of publishing damaged and
+in-transit stock as sellable.
 
 ### B3 — A separate EasyEcom location for BCPL, and its `location_key`
 
@@ -224,7 +225,7 @@ No phase is waiting on any answer above to be **written**.
 | Phase | Writable now | Live-testable now |
 |---|---|---|
 | 3 — SKU map, EasyEcom stock sink | **Done** | No (B3) |
-| 4 — `STOCK_SYNC` | Yes | No (B1, B2, B15) |
+| 4 — `STOCK_SYNC` | **Done** | No (B1, B2, B15) |
 | 5 — Orders to Vinculum | Yes | No (B4, B5) — **and must not run against BCPL production** |
 | 6 — `SHIPMENT_SYNC` | Yes | No (B7, B8) |
 | 7 — Reconciliation | Yes | Yes |

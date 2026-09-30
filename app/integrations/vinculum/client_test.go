@@ -530,3 +530,14 @@ func TestShipmentDetailAcceptsAnOrderListWithoutAWindow(t *testing.T) {
 		t.Errorf("order_no = %v, want the one order", body["order_no"])
 	}
 }
+
+// vendor builds a Vendor over the fake, with the sellable bucket configured.
+func (f *fakeVinculum) vendor(t *testing.T) *vinculum.Vendor {
+	t.Helper()
+	v, err := vinculum.NewVendor(f.client(t), nil,
+		vinculum.WithClock(func() time.Time { return time.Date(2026, 9, 30, 9, 0, 0, 0, time.UTC) }))
+	if err != nil {
+		t.Fatalf("NewVendor: %v", err)
+	}
+	return v
+}

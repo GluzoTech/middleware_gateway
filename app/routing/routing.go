@@ -78,6 +78,26 @@ type Resolution struct {
 	DestinationPlatform string
 }
 
+// Location is a distinct vendor location configured for an integration, with
+// the origin location its stock is written to.
+//
+// A scheduled sweep works per location, not per route. Several warehouse
+// routes can point at the same vendor location, and sweeping once per route
+// would read the same stock and push it several times — spending the origin
+// platform's rate limit to reach the same answer.
+type Location struct {
+	IntegrationID   uuid.UUID
+	IntegrationName string
+	OriginPlatform  string
+	VendorPlatform  string
+	// VendorReference is the vendor-side location, e.g. Vinculum's
+	// orderLocation. A location with none cannot be swept: there is nothing
+	// to ask the vendor about.
+	VendorReference string
+	// OriginReference is the origin-side location the stock is written to.
+	OriginReference string
+}
+
 // Resolver finds the integration for an event.
 type Resolver interface {
 	// Resolve returns the active route for key within integrationID, or

@@ -27,16 +27,20 @@ import (
 	"github.com/gluzo/integration-gateway/app/httpserver"
 	"github.com/gluzo/integration-gateway/app/idempotency"
 	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
+	"github.com/gluzo/integration-gateway/app/integrations/vinculum"
 	"github.com/gluzo/integration-gateway/app/intlog"
+	"github.com/gluzo/integration-gateway/app/inventorystate"
 	"github.com/gluzo/integration-gateway/app/logging"
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
 	"github.com/gluzo/integration-gateway/app/routing"
 	"github.com/gluzo/integration-gateway/app/scheduler"
+	"github.com/gluzo/integration-gateway/app/skumap"
 	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/webhook"
 	"github.com/gluzo/integration-gateway/app/worker"
 	"github.com/gluzo/integration-gateway/app/workflow"
 	"github.com/gluzo/integration-gateway/app/workflow/ordersync"
+	"github.com/gluzo/integration-gateway/app/workflow/stocksync"
 	"github.com/gluzo/integration-gateway/app/workflowstate"
 )
 
@@ -179,6 +183,25 @@ func run() error {
 		if err != nil {
 			return err
 		}
+		// Periodic work is only published where it can also be executed: a
+		// scheduler on an intake-only instance would fill the queue with
+		// jobs no worker in this process can run.
+		if jobWorker != nil {
+			for _, job := range stocksync.Jobs(routing.NewStore(pool), stocksync.ScheduleOptions{
+				Interval:       cfg.Scheduler.StockInterval,
+				FullInterval:   cfg.Scheduler.StockFullInterval,
+				VendorPlatform: vinculum.PlatformName,
+			}) {
+				if _, registered := registry.ByName(stocksync.Name); !registered {
+					logger.Warn("STOCK_SYNC is not registered: its scheduled jobs are not published",
+						slog.String("job", job.Name))
+					break
+				}
+				if err := periodic.Register(ctx, job); err != nil {
+					return err
+				}
+			}
+		}
 	} else {
 		logger.Warn("scheduler disabled: this instance publishes no periodic work")
 	}
@@ -291,37 +314,77 @@ func buildWorker(
 	}
 	// Fulfilment vendors. Each adapter declares its capabilities by the
 	// roles it implements; the registry discovers them. Adding a partner is
-	// one MustRegister call and a route row.
-	//
-	// The previous vendor pipeline is gone and Vinculum is not yet written, so this is
-	// deliberately empty. An instance in this state accepts webhooks but has
-	// nothing to submit orders to.
+	// one Register call and a route row.
 	vendors := vendor.NewRegistry()
-
-	if len(vendors.Platforms()) == 0 {
-		logger.Warn("no fulfilment vendor is registered: ORDER_SYNC is not available; run with WORKER_ENABLED=false until a vendor adapter is wired")
-		return worker.New(worker.Dependencies{
-			Queue:       jobQueue,
-			Registry:    registry,
-			Executor:    executor,
-			States:      states,
-			Idempotency: idempotencyStore,
-			Recorder:    recorder,
-			Logger:      logger,
-		}, workerConfig(cfg))
+	if cfg.Vinculum.APIOwner != "" || cfg.Vinculum.APIKey != "" {
+		vinculumClient, err := vinculum.NewClient(vinculum.Config{
+			BaseURL:        cfg.Vinculum.BaseURL,
+			APIOwner:       cfg.Vinculum.APIOwner,
+			APIKey:         cfg.Vinculum.APIKey,
+			Location:       cfg.Vinculum.Location,
+			SellableBucket: cfg.Vinculum.SellableBucket,
+			Timeout:        cfg.Vinculum.Timeout,
+		}, vinculum.WithLogger(logger))
+		if err != nil {
+			return nil, fmt.Errorf("configure Vinculum client (leave VINCULUM_API_OWNER empty for an instance with no vendor): %w", err)
+		}
+		vinculumVendor, err := vinculum.NewVendor(vinculumClient, logger)
+		if err != nil {
+			return nil, err
+		}
+		if err := vendors.Register(vinculumVendor); err != nil {
+			return nil, err
+		}
+		logger.Info("fulfilment vendor registered",
+			slog.String("vendor", vinculumVendor.Describe()),
+			slog.Any("roles", vendors.Roles(vinculum.PlatformName)))
+	} else {
+		logger.Warn("no Vinculum credentials configured: no fulfilment vendor is registered")
 	}
 
-	orderSync, err := ordersync.New(ordersync.Dependencies{
-		Resolver: routing.NewStore(pool),
-		Origins:  map[string]vendor.Origin{easyecom.PlatformName: easyecom.NewSource(easyecomClient, logger)},
-		Vendors:  vendors,
-		Logger:   logger,
-	})
-	if err != nil {
-		return nil, err
+	stockSinks := map[string]vendor.StockSink{easyecom.PlatformName: easyecom.NewSink(easyecomClient, logger)}
+	routes := routing.NewStore(pool)
+
+	// STOCK_SYNC needs a vendor that owns stock. Registering the workflow
+	// without one would accept scheduled jobs it could only fail.
+	if _, err := vendors.StockProvider(vinculum.PlatformName); err == nil {
+		stockSync, err := stocksync.New(stocksync.Dependencies{
+			Vendors: vendors,
+			Sinks:   stockSinks,
+			SKUs:    skumap.NewStore(pool),
+			Pushed:  inventorystate.NewStore(pool),
+			Logger:  logger,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := registry.Register(stockSync, event.StockSyncDue); err != nil {
+			return nil, err
+		}
+	} else {
+		logger.Warn("no vendor provides stock: STOCK_SYNC is not available")
 	}
-	if err := registry.Register(orderSync, event.OrderCreated, event.OrderConfirmed); err != nil {
-		return nil, err
+
+	// ORDER_SYNC needs a vendor that can *receive* orders, which is a
+	// different role from providing stock. Checking the role rather than
+	// merely that some vendor exists means the failure is reported once at
+	// start-up instead of once per order.
+	if _, err := vendors.OrderReceiver(vinculum.PlatformName); err != nil {
+		logger.Warn("no fulfilment vendor can receive orders: ORDER_SYNC is not available",
+			slog.String("reason", err.Error()))
+	} else {
+		orderSync, err := ordersync.New(ordersync.Dependencies{
+			Resolver: routes,
+			Origins:  map[string]vendor.Origin{easyecom.PlatformName: easyecom.NewSource(easyecomClient, logger)},
+			Vendors:  vendors,
+			Logger:   logger,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := registry.Register(orderSync, event.OrderCreated, event.OrderConfirmed); err != nil {
+			return nil, err
+		}
 	}
 
 	return worker.New(worker.Dependencies{

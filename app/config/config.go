@@ -52,6 +52,18 @@ type Scheduler struct {
 	Enabled      bool
 	PollInterval time.Duration
 	LockTTL      time.Duration
+
+	// StockInterval is how often the incremental stock sweep runs.
+	//
+	// It is a trade between how stale the storefront may be and how much of
+	// the vendor's rate limit the sweep consumes. Most sweeps push nothing,
+	// because only changed quantities are sent.
+	StockInterval time.Duration
+	// StockFullInterval is how often every SKU is pushed regardless of what
+	// was last recorded. This repairs drift left by a run that wrote the
+	// platform and failed before recording it, so it is a period rather
+	// than an operator action: drift nobody looks for is drift that stays.
+	StockFullInterval time.Duration
 }
 
 // Admin protects the operator endpoints. An empty token leaves them
@@ -236,6 +248,9 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			Enabled:      r.bool("SCHEDULER_ENABLED", true),
 			PollInterval: r.duration("SCHEDULER_POLL_INTERVAL", 30*time.Second),
 			LockTTL:      r.duration("SCHEDULER_LOCK_TTL", 5*time.Minute),
+
+			StockInterval:     r.duration("STOCK_SYNC_INTERVAL", 15*time.Minute),
+			StockFullInterval: r.duration("STOCK_SYNC_FULL_INTERVAL", 24*time.Hour),
 		},
 		Vinculum: Vinculum{
 			BaseURL:        r.str("VINCULUM_BASE_URL", "https://erp.vineretail.com"),
@@ -323,6 +338,8 @@ func (c *Config) Validate() error {
 		{"VINCULUM_TIMEOUT", c.Vinculum.Timeout},
 		{"SCHEDULER_POLL_INTERVAL", c.Scheduler.PollInterval},
 		{"SCHEDULER_LOCK_TTL", c.Scheduler.LockTTL},
+		{"STOCK_SYNC_INTERVAL", c.Scheduler.StockInterval},
+		{"STOCK_SYNC_FULL_INTERVAL", c.Scheduler.StockFullInterval},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
 		{"LOG_RETENTION_INTERVAL", c.Storage.LogRetentionInterval},

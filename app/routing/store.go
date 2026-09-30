@@ -169,3 +169,44 @@ func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
+
+// ActiveLocations returns every distinct vendor location configured on an
+// active route of an active integration.
+//
+// DISTINCT is the point. Several warehouse routes commonly share one vendor
+// location — a vendor ships to more than one of the origin's warehouses from
+// the same shelf — and a sweep per route would read the same stock and push
+// it once per route.
+//
+// Routes with no vendor reference are excluded rather than swept with an
+// empty location: asking a vendor for "the stock at ”" is not a question.
+func (s *Store) ActiveLocations(ctx context.Context) ([]Location, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT i.id, i.name, src.name, dst.name,
+		       r.destination_reference, COALESCE(r.origin_reference, '')
+		FROM integration_routes r
+		JOIN integrations i ON i.id = r.integration_id
+		JOIN platforms src ON src.id = i.source_platform_id
+		JOIN platforms dst ON dst.id = i.destination_platform_id
+		WHERE r.status = 'active' AND i.status = 'active'
+		  AND r.destination_reference IS NOT NULL AND r.destination_reference <> ''
+		ORDER BY i.name, r.destination_reference`)
+	if err != nil {
+		return nil, fmt.Errorf("routing: list active locations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Location
+	for rows.Next() {
+		var loc Location
+		if err := rows.Scan(&loc.IntegrationID, &loc.IntegrationName, &loc.OriginPlatform,
+			&loc.VendorPlatform, &loc.VendorReference, &loc.OriginReference); err != nil {
+			return nil, fmt.Errorf("routing: scan location: %w", err)
+		}
+		out = append(out, loc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("routing: list active locations: %w", err)
+	}
+	return out, nil
+}
