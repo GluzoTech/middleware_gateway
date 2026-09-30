@@ -68,6 +68,10 @@ func ToDomainShipment(rec dtoshipment.OrderShipment, observedAt time.Time) (*tra
 	if err != nil {
 		return nil, mappingErrorf("shipment for order %s: shipdate: %v", orderID, err)
 	}
+	deliveredAt, err := dto.ParseTime(d.DeliveredDate.String())
+	if err != nil {
+		return nil, mappingErrorf("shipment for order %s: delivereddate: %v", orderID, err)
+	}
 
 	// The dispatch block carries its own status; the order-level one is the
 	// fallback for a record that ships without restating it.
@@ -89,6 +93,9 @@ func ToDomainShipment(rec dtoshipment.OrderShipment, observedAt time.Time) (*tra
 	}
 	if !shippedAt.IsZero() {
 		out.ShippedAt = &shippedAt
+	}
+	if !deliveredAt.IsZero() {
+		out.DeliveredAt = &deliveredAt
 	}
 	if err := out.Validate(); err != nil {
 		return nil, mappingErrorf("shipment for order %s: %v", orderID, err)

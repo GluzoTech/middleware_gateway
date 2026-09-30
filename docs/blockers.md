@@ -1,6 +1,6 @@
 # Blockers and flagged decisions — feasibility
 
-Updated 30 September 2026, after Phase 5. Companion to the
+Updated 30 September 2026, after Phase 6. Companion to the
 [integration plan](vinculum-integration-plan.md) and the phase notes under
 [phases/](phases/).
 
@@ -107,6 +107,7 @@ a day's work, and a permanently weaker guarantee.
 | B16 | Bulk Inventory Update's per-SKU result shape | EasyEcom | Absent list = all accepted | Nothing | Partial failures reported as successes | One function |
 | B17 | Vinculum's `ship*` address field names | BCPL | Documented prefix, conventional names | **Phase 5 live** | **Fails quietly:** order accepted and shipped with a field missing | Nine struct tags |
 | B18 | The duplicate-order rejection's code and wording | BCPL | Keyword match, overridable by config | Nothing | Fails loudly; order stuck and visible, never duplicated | Configuration |
+| B19 | `AssignShipmentDetails` and `updateTrackingStatus` **paths** | EasyEcom | Conventional names | Phase 6 live | **Fails loud:** every dispatch push errors on the first call | Two constants |
 
 **On B17 — read this one.** It is the only unverified item in the project
 that can be wrong **without anyone noticing**. Every other guess fails loudly:
@@ -224,13 +225,17 @@ more after Phase 2, which added a second concurrent subsystem.
 
 1. A separate location for BCPL and its `location_key`. *(B3 — the important
    one)*
-2. The `current_shipment_status_id` enumeration. *(B7)*
+2. The `current_shipment_status_id` enumeration. *(B7 — until it arrives the
+   gateway assigns tracking numbers but does not set delivery status, by
+   design: it will not guess a number that would silently put an order into
+   the wrong state)*
 3. Register BCPL's couriers so we can read their `companyCarrierId` values.
    *(B8)*
 4. Rate limits and the maximum batch size on the bulk inventory endpoint.
    *(B9)*
-5. **The exact path of Bulk Inventory Update**, and the shape of its per-SKU
-   response. *(B15, B16 — needed before Phase 4 works at all)*
+5. **The exact paths of Bulk Inventory Update, AssignShipmentDetails and
+   updateTrackingStatus**, and the shape of the bulk per-SKU response.
+   *(B15, B16, B19 — each needed before its phase works at all)*
 
 ---
 
@@ -243,7 +248,7 @@ No phase is waiting on any answer above to be **written**.
 | 3 — SKU map, EasyEcom stock sink | **Done** | No (B3) |
 | 4 — `STOCK_SYNC` | **Done** | No (B1, B2, B15) |
 | 5 — Orders to Vinculum | **Done** | No (B4, B5, B17) — **and must not run against BCPL production** |
-| 6 — `SHIPMENT_SYNC` | Yes | No (B7, B8) |
+| 6 — `SHIPMENT_SYNC` | **Done** | No (B7, B8, B19) |
 | 7 — Reconciliation | Yes | Yes |
 
 The pattern that makes this possible is the same one used in Phases 0 to 2:

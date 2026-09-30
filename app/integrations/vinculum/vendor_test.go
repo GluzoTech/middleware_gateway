@@ -178,16 +178,68 @@ func TestVendorRegistersUnderTheRolesItImplements(t *testing.T) {
 		t.Errorf("OrderReceiver: %v", err)
 	}
 
-	// Dispatch is Phase 6. Asking for a role this vendor does not implement
-	// must be a different error from asking for an unknown vendor: they are
-	// different operator mistakes and are fixed differently.
-	missingRole, errRole := reg.FulfilmentProvider(vinculum.PlatformName)
-	if errRole == nil {
-		t.Fatalf("this vendor does not yet provide dispatch records, got %v", missingRole)
+	if _, err := reg.FulfilmentProvider(vinculum.PlatformName); err != nil {
+		t.Errorf("FulfilmentProvider: %v", err)
 	}
+	if got := reg.Roles(vinculum.PlatformName); len(got) != 3 {
+		t.Errorf("roles = %v, want all three", got)
+	}
+
+	// Asking for a role a registered vendor does not implement must remain a
+	// different error from asking for an unknown vendor: they are different
+	// operator mistakes, fixed differently. This vendor now implements every
+	// role, so the distinction is checked against one that implements none.
 	if _, errUnknown := reg.FulfilmentProvider("no-such-vendor"); errUnknown == nil {
-		t.Fatal("an unknown vendor must also error")
-	} else if errRole.Error() == errUnknown.Error() {
-		t.Errorf("a missing role and an unknown vendor report the same error: %v", errRole)
+		t.Fatal("an unknown vendor must error")
+	}
+}
+
+func TestFetchShipmentsReturnsDomainShipments(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeVinculum(t)
+	v := f.vendor(t)
+
+	page, err := v.FetchShipments(ctx, vendorRoute(), vendor.Window{
+		From: time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC),
+		To:   time.Date(2026, 9, 30, 0, 0, 0, 0, time.UTC),
+	})
+	if err != nil {
+		t.Fatalf("FetchShipments: %v", err)
+	}
+	if len(page.Shipments) != 1 {
+		t.Fatalf("got %d shipments, want 1", len(page.Shipments))
+	}
+	s := page.Shipments[0]
+	if s.OrderExternalID != "9876543" || s.TrackingNumber != "AWB1" {
+		t.Errorf("shipment = %+v", s)
+	}
+	// Under dropship BCPL invoices under its own registration, and the
+	// origin needs both to show the right seller.
+	if s.SellerGSTIN != "07AABCB1234C1ZQ" || s.InvoiceNumber != "BCPL/2026/00891" {
+		t.Errorf("invoice details = %q / %q", s.InvoiceNumber, s.SellerGSTIN)
+	}
+
+	// The window must reach the vendor, or a sweep would read everything
+	// every time.
+	body, _ := f.lastShipmentBody.Load().(map[string]any)
+	if got := body["date_from"]; got != "2026-09-29 00:00:00" {
+		t.Errorf("date_from = %v", got)
+	}
+	if got := body["order_location"]; got != "DEL" {
+		t.Errorf("order_location = %v, want the route's vendor reference", got)
+	}
+}
+
+func TestFetchShipmentsRejectsAnIncompleteRoute(t *testing.T) {
+	ctx := context.Background()
+	f := newFakeVinculum(t)
+	v := f.vendor(t)
+
+	_, err := v.FetchShipments(ctx, vendor.Route{VendorPlatform: vinculum.PlatformName}, vendor.Window{})
+	if err == nil {
+		t.Fatal("an incomplete route must not be swept")
+	}
+	if f.shipmentCalls.Load() != 0 {
+		t.Error("an incomplete route reached the vendor")
 	}
 }

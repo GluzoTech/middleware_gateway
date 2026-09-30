@@ -64,6 +64,12 @@ type Scheduler struct {
 	// platform and failed before recording it, so it is a period rather
 	// than an operator action: drift nobody looks for is drift that stays.
 	StockFullInterval time.Duration
+
+	// ShipmentInterval is how often dispatch records are read from the
+	// vendor, and ShipmentMaxWindow caps how much time one run may cover so
+	// a backlog after an outage drains in chunks.
+	ShipmentInterval  time.Duration
+	ShipmentMaxWindow time.Duration
 }
 
 // Admin protects the operator endpoints. An empty token leaves them
@@ -106,7 +112,14 @@ type EasyEcom struct {
 	Email       string
 	Password    string
 	LocationKey string
-	Timeout     time.Duration
+
+	// ShipmentStatusIDs maps the domain's delivery statuses to EasyEcom's
+	// own numeric enumeration, as "SHIPPED=3,DELIVERED=7". Unset statuses
+	// are not pushed: the gateway will not guess an id, because a wrong one
+	// puts an order into a state nobody asked for, silently.
+	ShipmentStatusIDs map[string]string
+
+	Timeout time.Duration
 }
 
 // Vinculum holds credentials for outbound Vinculum eRetail calls.
@@ -252,7 +265,10 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			Email:       r.str("EASYECOM_EMAIL", ""),
 			Password:    r.str("EASYECOM_PASSWORD", ""),
 			LocationKey: r.str("EASYECOM_LOCATION_KEY", ""),
-			Timeout:     r.duration("EASYECOM_TIMEOUT", 15*time.Second),
+
+			ShipmentStatusIDs: r.pairs("EASYECOM_SHIPMENT_STATUS_IDS"),
+
+			Timeout: r.duration("EASYECOM_TIMEOUT", 15*time.Second),
 		},
 		Scheduler: Scheduler{
 			Enabled:      r.bool("SCHEDULER_ENABLED", true),
@@ -261,6 +277,9 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 
 			StockInterval:     r.duration("STOCK_SYNC_INTERVAL", 15*time.Minute),
 			StockFullInterval: r.duration("STOCK_SYNC_FULL_INTERVAL", 24*time.Hour),
+
+			ShipmentInterval:  r.duration("SHIPMENT_SYNC_INTERVAL", 15*time.Minute),
+			ShipmentMaxWindow: r.duration("SHIPMENT_SYNC_MAX_WINDOW", 24*time.Hour),
 		},
 		Vinculum: Vinculum{
 			BaseURL:        r.str("VINCULUM_BASE_URL", "https://erp.vineretail.com"),
@@ -359,6 +378,8 @@ func (c *Config) Validate() error {
 		{"SCHEDULER_LOCK_TTL", c.Scheduler.LockTTL},
 		{"STOCK_SYNC_INTERVAL", c.Scheduler.StockInterval},
 		{"STOCK_SYNC_FULL_INTERVAL", c.Scheduler.StockFullInterval},
+		{"SHIPMENT_SYNC_INTERVAL", c.Scheduler.ShipmentInterval},
+		{"SHIPMENT_SYNC_MAX_WINDOW", c.Scheduler.ShipmentMaxWindow},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
 		{"LOG_RETENTION_INTERVAL", c.Storage.LogRetentionInterval},
@@ -410,6 +431,35 @@ func (r *reader) list(key string) []string {
 		if part = strings.TrimSpace(part); part != "" {
 			out = append(out, part)
 		}
+	}
+	return out
+}
+
+// pairs reads a comma-separated list of NAME=VALUE entries. Absent, empty
+// and malformed-only all give nil, and a malformed entry is reported rather
+// than silently dropped: a status mapping that half-loaded would push some
+// statuses and quietly skip others.
+func (r *reader) pairs(key string) map[string]string {
+	v, ok := r.raw(key)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, entry := range strings.Split(v, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, value, found := strings.Cut(entry, "=")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if !found || name == "" || value == "" {
+			r.errs = append(r.errs, fmt.Errorf("%s: expected NAME=VALUE entries, got %q", key, entry))
+			return nil
+		}
+		out[strings.ToUpper(name)] = value
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

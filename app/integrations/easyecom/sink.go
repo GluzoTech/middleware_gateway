@@ -7,7 +7,9 @@ import (
 
 	"github.com/gluzo/integration-gateway/app/apperror"
 	"github.com/gluzo/integration-gateway/app/domain/inventory"
+	"github.com/gluzo/integration-gateway/app/domain/tracking"
 	dtoinventory "github.com/gluzo/integration-gateway/app/integrations/easyecom/dto/inventory"
+	dtotracking "github.com/gluzo/integration-gateway/app/integrations/easyecom/dto/tracking"
 	"github.com/gluzo/integration-gateway/app/vendor"
 )
 
@@ -20,16 +22,21 @@ import (
 // carrying both would be a type whose method names do not agree about which
 // way data moves.
 type Sink struct {
-	client *Client
-	logger *slog.Logger
+	client    *Client
+	logger    *slog.Logger
+	statusIDs ShipmentStatusIDs
 }
 
 // NewSink wraps a client.
-func NewSink(client *Client, logger *slog.Logger) *Sink {
+func NewSink(client *Client, logger *slog.Logger, opts ...SinkOption) *Sink {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Sink{client: client, logger: logger}
+	s := &Sink{client: client, logger: logger, statusIDs: ShipmentStatusIDs{}}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Platform implements vendor.StockSink.
@@ -164,3 +171,108 @@ func chunk(items []dtoinventory.BulkInventoryUpdateItem, size int) [][]dtoinvent
 
 // compile-time proof that the sink satisfies the role it is registered under.
 var _ vendor.StockSink = (*Sink)(nil)
+
+// ShipmentStatusIDs maps the domain's delivery statuses to EasyEcom's own
+// numeric enumeration.
+//
+// TODO(VERIFY): the values are assigned by EasyEcom and are not published
+// (open item 7). The gateway does not guess one: an unmapped status skips
+// the status update and still assigns the dispatch details, so the customer
+// gets a tracking number even while the status cannot be set. Guessing would
+// put an order into a state nobody asked for, silently.
+type ShipmentStatusIDs map[tracking.Status]string
+
+// Lookup returns the platform's id for a status.
+func (m ShipmentStatusIDs) Lookup(s tracking.Status) (string, bool) {
+	id, ok := m[s]
+	return strings.TrimSpace(id), ok && strings.TrimSpace(id) != ""
+}
+
+// WithShipmentStatusIDs configures the status enumeration for dispatch
+// pushes.
+func WithShipmentStatusIDs(ids ShipmentStatusIDs) SinkOption {
+	return func(s *Sink) { s.statusIDs = ids }
+}
+
+// SinkOption configures a Sink.
+type SinkOption func(*Sink)
+
+// PushShipment implements vendor.ShipmentSink.
+//
+// Two calls, and the split matters. AssignShipmentDetails records who is
+// carrying the parcel and under what waybill; UpdateTrackingStatus says how
+// far it has got. The first is useful on its own — a customer with a
+// tracking number can follow the parcel at the carrier — so a missing status
+// enumeration degrades to "details without status" rather than to nothing.
+//
+// decision comes from the caller, which holds the record of what was pushed
+// before. The sink does not decide whether a status regresses: that needs
+// durable state, and a platform adapter must not own it.
+func (s *Sink) PushShipment(ctx context.Context, route vendor.Route, u vendor.ShipmentUpdate) error {
+	if err := route.Validate(); err != nil {
+		return apperror.Wrap(apperror.Validation, "incomplete route", err)
+	}
+	sh := u.Shipment
+	if err := sh.Validate(); err != nil {
+		return apperror.Wrap(apperror.Validation, "incomplete shipment", err)
+	}
+	location := strings.TrimSpace(route.OriginReference)
+
+	assign := dtotracking.AssignShipmentDetailsRequest{
+		InvoiceID:        strings.TrimSpace(sh.OrderExternalID),
+		Courier:          strings.TrimSpace(u.CarrierName),
+		AWBNum:           strings.TrimSpace(sh.TrackingNumber),
+		CompanyCarrierID: strings.TrimSpace(u.CarrierReference),
+	}
+	if assign.Courier == "" {
+		assign.Courier = strings.TrimSpace(sh.Carrier)
+	}
+	if _, err := s.client.AssignShipmentDetails(ctx, location, assign); err != nil {
+		return err
+	}
+
+	if !u.AdvanceStatus {
+		// Details corrected, status deliberately left where it was.
+		return nil
+	}
+
+	statusID, ok := s.statusIDs.Lookup(sh.Status)
+	if !ok {
+		// Not an error: the dispatch details did land, and failing here
+		// would retry a call that can never succeed until an operator
+		// supplies the enumeration.
+		s.logger.WarnContext(ctx, "shipment status not pushed: no configured EasyEcom status id",
+			slog.String("order", sh.OrderExternalID),
+			slog.String("status", string(sh.Status)),
+			slog.String("integration", route.IntegrationName))
+		return nil
+	}
+	if strings.TrimSpace(sh.TrackingNumber) == "" {
+		// The status update is keyed by waybill; without one there is
+		// nothing to address it to.
+		s.logger.WarnContext(ctx, "shipment status not pushed: the dispatch carries no waybill",
+			slog.String("order", sh.OrderExternalID),
+			slog.String("status", string(sh.Status)))
+		return nil
+	}
+
+	update := dtotracking.UpdateTrackingStatusRequest{
+		CurrentShipmentStatusID: statusID,
+		AWB:                     strings.TrimSpace(sh.TrackingNumber),
+	}
+	if sh.DeliveredAt != nil && !sh.DeliveredAt.IsZero() {
+		update.DeliveryDate = sh.DeliveredAt.UTC().Format(deliveryDateLayout)
+	}
+	_, err := s.client.UpdateTrackingStatus(ctx, location, update)
+	return err
+}
+
+// deliveryDateLayout is how a delivery timestamp is rendered for EasyEcom.
+//
+// TODO(VERIFY): the collection records the field, not its format. This
+// follows the layout EasyEcom uses in its order payloads.
+const deliveryDateLayout = "2006-01-02 15:04:05"
+
+// compile-time proof that the sink satisfies both roles it is registered
+// under.
+var _ vendor.ShipmentSink = (*Sink)(nil)

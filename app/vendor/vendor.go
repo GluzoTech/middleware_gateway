@@ -223,6 +223,29 @@ type StockSink interface {
 	PushStock(ctx context.Context, route Route, levels []inventory.Level) (StockResult, error)
 }
 
+// ShipmentUpdate is what an origin platform is told about a dispatch.
+//
+// It carries more than the shipment because two things the origin needs are
+// not properties of the parcel. The carrier reference is the origin's own
+// identifier for the carrier, which only configuration can supply; and
+// whether the status advances is a judgement against what was pushed before,
+// which needs durable state a platform adapter must not own.
+type ShipmentUpdate struct {
+	Shipment tracking.Shipment
+
+	// CarrierReference is the origin platform's identifier for the carrier,
+	// resolved from configuration. Empty where the origin does not use one.
+	CarrierReference string
+	// CarrierName is the name to present, where it differs from the
+	// vendor's spelling.
+	CarrierName string
+
+	// AdvanceStatus is false when only the dispatch details changed. A late
+	// arrival may correct a tracking number, and doing so must not roll a
+	// delivered order back to shipped.
+	AdvanceStatus bool
+}
+
 // ShipmentSink is an origin platform that accepts dispatch information for an
 // externally shipped order.
 type ShipmentSink interface {
@@ -230,9 +253,9 @@ type ShipmentSink interface {
 
 	// PushShipment records the shipment against the origin's order.
 	//
-	// Implementations must not let a shipment's status move backwards. A
-	// "delivered" notice can arrive before the "shipped" one that preceded
-	// it; a late arrival may correct the tracking number but leaves a more
-	// advanced status alone.
-	PushShipment(ctx context.Context, route Route, s tracking.Shipment) error
+	// A shipment's status must never move backwards. A "delivered" notice
+	// can arrive before the "shipped" one that preceded it, because the
+	// gateway polls on a schedule; the caller decides whether an update
+	// advances the status and says so in the update.
+	PushShipment(ctx context.Context, route Route, u ShipmentUpdate) error
 }

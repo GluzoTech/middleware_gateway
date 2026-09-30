@@ -13,6 +13,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/domain/order"
 	dtoinventory "github.com/gluzo/integration-gateway/app/integrations/vinculum/dto/inventory"
 	dtoorder "github.com/gluzo/integration-gateway/app/integrations/vinculum/dto/order"
+	dtoshipment "github.com/gluzo/integration-gateway/app/integrations/vinculum/dto/shipment"
 	"github.com/gluzo/integration-gateway/app/integrations/vinculum/mapper"
 	"github.com/gluzo/integration-gateway/app/vendor"
 )
@@ -20,10 +21,10 @@ import (
 // Vendor is BCPL as a fulfilment partner: the adapter that implements the
 // roles in app/vendor on top of the Vinculum client.
 //
-// StockProvider and OrderReceiver are implemented. The registry discovers
-// each by type assertion, so asking this vendor for dispatch records reports
-// a missing role rather than an unknown vendor — a different mistake,
-// diagnosed differently. FulfilmentProvider arrives in Phase 6.
+// All three vendor roles are implemented. The registry discovers each by
+// type assertion at registration, so a partner that served only some of them
+// would be reported as missing the rest rather than obliged to declare
+// methods it cannot serve.
 type Vendor struct {
 	client *Client
 	logger *slog.Logger
@@ -221,11 +222,59 @@ func (v *Vendor) recogniseDuplicate(ctx context.Context, err error, req dtoorder
 
 // compile-time proof of the roles this adapter is registered under.
 var (
-	_ vendor.StockProvider = (*Vendor)(nil)
-	_ vendor.OrderReceiver = (*Vendor)(nil)
+	_ vendor.StockProvider      = (*Vendor)(nil)
+	_ vendor.OrderReceiver      = (*Vendor)(nil)
+	_ vendor.FulfilmentProvider = (*Vendor)(nil)
 )
 
 // Describe reports the roles implemented, for start-up logging.
 func (v *Vendor) Describe() string {
-	return fmt.Sprintf("%s (orders and stock, sellable bucket %q)", PlatformName, v.client.SellableBucket())
+	return fmt.Sprintf("%s (orders, stock and dispatch, sellable bucket %q)", PlatformName, v.client.SellableBucket())
+}
+
+// FetchShipments implements vendor.FulfilmentProvider.
+//
+// Under dropship BCPL books the courier, so the dispatch record — the AWB,
+// the carrier, the invoice and the delivery status — originates with them
+// and flows inward. Nothing here writes dispatch back to the vendor.
+//
+// An order with no shipDetail block yet is not an error and does not appear
+// in the page: an order waiting in the warehouse is what a sweep expects to
+// find most of the time.
+func (v *Vendor) FetchShipments(ctx context.Context, route vendor.Route, w vendor.Window) (vendor.ShipmentPage, error) {
+	if err := route.Validate(); err != nil {
+		return vendor.ShipmentPage{}, apperror.Wrap(apperror.Validation, "incomplete route", err)
+	}
+
+	// vendor.Window pages from zero; Vinculum's pageNumber starts at one.
+	page := w.Page + 1
+
+	resp, err := v.client.ShipmentDetail(ctx, dtoshipment.ShipmentDetailRequest{
+		OrderLocation: route.VendorReference,
+		DateFrom:      w.From,
+		DateTo:        w.To,
+		OrderNos:      w.OrderIDs,
+		PageNumber:    page,
+	})
+	if err != nil {
+		return vendor.ShipmentPage{}, err
+	}
+
+	shipments, summary := mapper.ToDomainShipments(resp.Response, v.now().UTC())
+	if summary.Skipped > 0 {
+		// Not-shipped records are ordinary and are counted separately.
+		// Skipped ones are malformed, and a silent malformed record is an
+		// order whose customer never gets a tracking number.
+		v.logger.WarnContext(ctx, "vinculum shipment records could not be mapped",
+			slog.String("location", route.VendorReference),
+			slog.Int("skipped", summary.Skipped),
+			slog.Int("page", page))
+	}
+
+	return vendor.ShipmentPage{
+		Shipments: shipments,
+		// An empty page ends the sweep whatever hasMore claims.
+		HasMore:  resp.HasMore.Bool() && len(resp.Response) > 0,
+		NextPage: w.Page + 1,
+	}, nil
 }

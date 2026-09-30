@@ -19,9 +19,11 @@ import (
 	"github.com/gluzo/integration-gateway/app/admin"
 	"github.com/gluzo/integration-gateway/app/auth"
 	"github.com/gluzo/integration-gateway/app/config"
+	"github.com/gluzo/integration-gateway/app/couriermap"
 	"github.com/gluzo/integration-gateway/app/database/migrations"
 	"github.com/gluzo/integration-gateway/app/database/postgres"
 	"github.com/gluzo/integration-gateway/app/database/redisconn"
+	"github.com/gluzo/integration-gateway/app/domain/tracking"
 	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpserver"
@@ -34,12 +36,14 @@ import (
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
 	"github.com/gluzo/integration-gateway/app/routing"
 	"github.com/gluzo/integration-gateway/app/scheduler"
+	"github.com/gluzo/integration-gateway/app/shipmentstate"
 	"github.com/gluzo/integration-gateway/app/skumap"
 	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/webhook"
 	"github.com/gluzo/integration-gateway/app/worker"
 	"github.com/gluzo/integration-gateway/app/workflow"
 	"github.com/gluzo/integration-gateway/app/workflow/ordersync"
+	"github.com/gluzo/integration-gateway/app/workflow/shipmentsync"
 	"github.com/gluzo/integration-gateway/app/workflow/stocksync"
 	"github.com/gluzo/integration-gateway/app/workflowstate"
 )
@@ -187,18 +191,31 @@ func run() error {
 		// scheduler on an intake-only instance would fill the queue with
 		// jobs no worker in this process can run.
 		if jobWorker != nil {
-			for _, job := range stocksync.Jobs(routing.NewStore(pool), stocksync.ScheduleOptions{
-				Interval:       cfg.Scheduler.StockInterval,
-				FullInterval:   cfg.Scheduler.StockFullInterval,
-				VendorPlatform: vinculum.PlatformName,
-			}) {
-				if _, registered := registry.ByName(stocksync.Name); !registered {
-					logger.Warn("STOCK_SYNC is not registered: its scheduled jobs are not published",
-						slog.String("job", job.Name))
-					break
+			locations := routing.NewStore(pool)
+			periodicJobs := map[string][]scheduler.Job{
+				stocksync.Name: stocksync.Jobs(locations, stocksync.ScheduleOptions{
+					Interval:       cfg.Scheduler.StockInterval,
+					FullInterval:   cfg.Scheduler.StockFullInterval,
+					VendorPlatform: vinculum.PlatformName,
+				}),
+				shipmentsync.Name: {shipmentsync.Job(locations, shipmentsync.ScheduleOptions{
+					Interval:       cfg.Scheduler.ShipmentInterval,
+					MaxWindow:      cfg.Scheduler.ShipmentMaxWindow,
+					VendorPlatform: vinculum.PlatformName,
+				})},
+			}
+			for workflowName, jobs := range periodicJobs {
+				if _, registered := registry.ByName(workflowName); !registered {
+					// Publishing work no worker can execute would fill the
+					// queue with jobs that only ever dead-letter.
+					logger.Warn("workflow is not registered: its scheduled jobs are not published",
+						slog.String("workflow", workflowName))
+					continue
 				}
-				if err := periodic.Register(ctx, job); err != nil {
-					return err
+				for _, job := range jobs {
+					if err := periodic.Register(ctx, job); err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -347,7 +364,12 @@ func buildWorker(
 		logger.Warn("no Vinculum credentials configured: no fulfilment vendor is registered")
 	}
 
-	stockSinks := map[string]vendor.StockSink{easyecom.PlatformName: easyecom.NewSink(easyecomClient, logger)}
+	// One sink serves both origin roles: it is EasyEcom receiving what the
+	// vendor owns, whether that is stock or dispatch.
+	easyecomSink := easyecom.NewSink(easyecomClient, logger,
+		easyecom.WithShipmentStatusIDs(shipmentStatusIDs(cfg, logger)))
+	stockSinks := map[string]vendor.StockSink{easyecom.PlatformName: easyecomSink}
+	shipmentSinks := map[string]vendor.ShipmentSink{easyecom.PlatformName: easyecomSink}
 	routes := routing.NewStore(pool)
 
 	// STOCK_SYNC needs a vendor that owns stock. Registering the workflow
@@ -368,6 +390,26 @@ func buildWorker(
 		}
 	} else {
 		logger.Warn("no vendor provides stock: STOCK_SYNC is not available")
+	}
+
+	// SHIPMENT_SYNC needs a vendor that ships and therefore owns the
+	// dispatch record.
+	if _, err := vendors.FulfilmentProvider(vinculum.PlatformName); err == nil {
+		shipmentSync, err := shipmentsync.New(shipmentsync.Dependencies{
+			Vendors:  vendors,
+			Sinks:    shipmentSinks,
+			Couriers: couriermap.NewStore(pool),
+			Pushed:   shipmentstate.NewStore(pool),
+			Logger:   logger,
+		})
+		if err != nil {
+			return nil, err
+		}
+		if err := registry.Register(shipmentSync, event.ShipmentSyncDue); err != nil {
+			return nil, err
+		}
+	} else {
+		logger.Warn("no vendor provides dispatch records: SHIPMENT_SYNC is not available")
 	}
 
 	// ORDER_SYNC needs a vendor that can *receive* orders, which is a
@@ -412,4 +454,21 @@ func workerConfig(cfg *config.Config) worker.Config {
 		StaleRunningAfter: cfg.Worker.StaleRunningAfter,
 		RetryFailedAfter:  cfg.Worker.RetryFailedAfter,
 	}
+}
+
+// shipmentStatusIDs reads the origin platform's delivery-status enumeration
+// from configuration.
+//
+// Unset statuses are not pushed rather than guessed. EasyEcom assigns these
+// numbers and does not publish them, and sending a wrong one would put an
+// order into a state nobody asked for without any error to notice.
+func shipmentStatusIDs(cfg *config.Config, logger *slog.Logger) easyecom.ShipmentStatusIDs {
+	ids := make(easyecom.ShipmentStatusIDs, len(cfg.EasyEcom.ShipmentStatusIDs))
+	for name, id := range cfg.EasyEcom.ShipmentStatusIDs {
+		ids[tracking.Status(name)] = id
+	}
+	if len(ids) == 0 {
+		logger.Warn("EASYECOM_SHIPMENT_STATUS_IDS is empty: dispatch details will be assigned but delivery status will not be pushed")
+	}
+	return ids
 }

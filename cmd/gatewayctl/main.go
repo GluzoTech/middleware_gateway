@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/gluzo/integration-gateway/app/auth"
+	"github.com/gluzo/integration-gateway/app/couriermap"
 	"github.com/gluzo/integration-gateway/app/database/migrations"
 	"github.com/gluzo/integration-gateway/app/database/postgres"
 	"github.com/gluzo/integration-gateway/app/routing"
@@ -48,6 +49,10 @@ Usage:
   gatewayctl skumap set-status --id MAPPING_ID --status active|disabled
   gatewayctl skumap remove --id MAPPING_ID
   gatewayctl skumap list --integration NAME
+  gatewayctl courier add --integration NAME --transporter NAME --carrier-id ID [--name NAME]
+  gatewayctl courier set-status --id MAPPING_ID --status active|disabled
+  gatewayctl courier remove --id MAPPING_ID
+  gatewayctl courier list --integration NAME
 
 Environment:
   DATABASE_URL  PostgreSQL connection URL (required)
@@ -99,6 +104,8 @@ func run(args []string, stdout, stderr io.Writer, lookup func(string) (string, b
 		return routeCommand(ctx, args[1:], stdout, lookup)
 	case "skumap":
 		return skumapCommand(ctx, args[1:], stdout, lookup)
+	case "courier":
+		return courierCommand(ctx, args[1:], stdout, lookup)
 	default:
 		return fmt.Errorf("%w: unknown command %q", errUsage, args[0])
 	}
@@ -474,6 +481,90 @@ func skumapCommand(ctx context.Context, args []string, stdout io.Writer, lookup 
 		})
 	default:
 		return fmt.Errorf("%w: unknown skumap command %q", errUsage, args[0])
+	}
+}
+
+// courierCommand manages the correspondence between a vendor's carrier names
+// and the origin platform's carrier identifiers. The identifier is assigned
+// by the origin when the carrier is registered on the account, so it can only
+// ever be configuration.
+func courierCommand(ctx context.Context, args []string, stdout io.Writer, lookup func(string) (string, bool)) error {
+	if len(args) == 0 {
+		return fmt.Errorf("%w: courier needs a subcommand", errUsage)
+	}
+	fs := flag.NewFlagSet("courier "+args[0], flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	integration := fs.String("integration", "", "integration name")
+	transporter := fs.String("transporter", "", "the carrier name as the vendor reports it")
+	carrierID := fs.String("carrier-id", "", "the origin platform's own carrier identifier")
+	name := fs.String("name", "", "the name to present to the origin platform, when it differs")
+	status := fs.String("status", "", "active or disabled")
+	id := fs.String("id", "", "mapping id")
+	if err := fs.Parse(args[1:]); err != nil {
+		return errUsage
+	}
+
+	withCouriers := func(fn func(*couriermap.Store) error) error {
+		return withPool(ctx, lookup, func(pool *pgxpool.Pool) error { return fn(couriermap.NewStore(pool)) })
+	}
+
+	switch args[0] {
+	case "add":
+		if *integration == "" || *transporter == "" || *carrierID == "" {
+			return fmt.Errorf("%w: --integration, --transporter and --carrier-id are required", errUsage)
+		}
+		return withCouriers(func(store *couriermap.Store) error {
+			c, err := store.Add(ctx, *integration, *transporter, *carrierID, *name)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "carrier %q -> %s added to integration %q (id %s)\n",
+				c.Transporter, c.CompanyCarrierID, *integration, c.ID)
+			return nil
+		})
+	case "set-status":
+		mappingID, err := uuid.Parse(*id)
+		if err != nil || *status == "" {
+			return fmt.Errorf("%w: --id must be a mapping UUID and --status is required", errUsage)
+		}
+		return withCouriers(func(store *couriermap.Store) error {
+			if err := store.SetStatus(ctx, mappingID, *status); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "carrier mapping %s is now %s\n", mappingID, *status)
+			return nil
+		})
+	case "remove":
+		mappingID, err := uuid.Parse(*id)
+		if err != nil {
+			return fmt.Errorf("%w: --id must be a mapping UUID", errUsage)
+		}
+		return withCouriers(func(store *couriermap.Store) error {
+			if err := store.Remove(ctx, mappingID); err != nil {
+				return err
+			}
+			fmt.Fprintf(stdout, "carrier mapping %s removed\n", mappingID)
+			return nil
+		})
+	case "list":
+		if *integration == "" {
+			return fmt.Errorf("%w: --integration is required", errUsage)
+		}
+		return withCouriers(func(store *couriermap.Store) error {
+			couriers, err := store.List(ctx, *integration)
+			if err != nil {
+				return err
+			}
+			tw := tabwriter.NewWriter(stdout, 0, 4, 2, ' ', 0)
+			fmt.Fprintln(tw, "ID\tTRANSPORTER\tCARRIER_ID\tPRESENTED_AS\tSTATUS\tCREATED")
+			for _, c := range couriers {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", c.ID, c.Transporter, c.CompanyCarrierID,
+					c.PresentedName(), c.Status, c.CreatedAt.Format(time.RFC3339))
+			}
+			return tw.Flush()
+		})
+	default:
+		return fmt.Errorf("%w: unknown courier command %q", errUsage, args[0])
 	}
 }
 

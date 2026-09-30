@@ -89,6 +89,9 @@ model only.
 | `app/skumap` | Gluzo SKU to vendor item code, both directions, with a safety buffer | V3 |
 | `app/inventorystate` | What was last pushed to the origin, per SKU and origin location | V4 |
 | `app/workflow/stocksync` | The STOCK_SYNC workflow and its two scheduled jobs | V4 |
+| `app/couriermap` | Vendor carrier name to the origin's carrier identifier | V6 |
+| `app/shipmentstate` | The furthest dispatch state pushed per package | V6 |
+| `app/workflow/shipmentsync` | The SHIPMENT_SYNC workflow and its scheduled job | V6 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
 
 Phases 1–12 are the original build. `V0`… are phases of the

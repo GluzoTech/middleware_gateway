@@ -242,6 +242,22 @@ they are wrong and asking again would only be told the same thing.
 | `ShipmentDetail` | `POST /RestWS/api/eretail/v1/order/shipmentDetail` | Field names per the published specification |
 | `CreateOrder` | `POST /RestWS/api/eretail/v4/order/create` | Header and line field names per the specification; **the `ship*` address field names are not enumerated there and are unverified** |
 
+### Dispatch, and why it never moves backwards
+
+`shipmentDetail` is read on a schedule, so records arrive out of order as a
+matter of course: a sweep can read "delivered" before it has ever read
+"shipped". `tracking.Status.Progress()` orders the statuses once, and
+`app/shipmentstate` records the furthest state pushed per package, so:
+
+- a status that advances is pushed;
+- a status that does not is ignored, unless the waybill or carrier changed,
+  in which case the details are pushed and the status is left alone;
+- an identical record is a no-op, which is what makes a sweep safe to repeat.
+
+Returned and cancelled rank above delivered deliberately. An RTO reported
+after a delivery notice is the vendor correcting itself, and the vendor owns
+dispatch.
+
 Both page. `hasMore` drives the stock sweep, `pageNumber` the shipment sweep,
 and each `FetchAll*` helper stops at a page ceiling rather than trusting a
 `hasMore` that never goes false. A stock sweep that ends early is reported as

@@ -123,9 +123,10 @@ type ShipDetail struct {
 	InvoiceNo   dto.FlexString `json:"invoiceNo"`
 	SellerGstNo dto.FlexString `json:"sellerGstNo"`
 
-	// DeliveredDate, DeliveryNumber and EwbNo are carried through to the
-	// workflow state rather than the domain model; no consumer needs them
-	// yet and inventing domain fields for them would be speculative.
+	// DeliveredDate became a domain field in Phase 6: the origin platform's
+	// status update carries a delivery date, so it has a consumer now.
+	// DeliveryNumber and EwbNo still do not, and are carried in the
+	// workflow state rather than invented into the domain.
 	DeliveredDate  dto.FlexString `json:"delivereddate"`
 	DeliveryNumber dto.FlexString `json:"deliveryNumber"`
 	EwbNo          dto.FlexString `json:"ewbNo"`
