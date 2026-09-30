@@ -31,6 +31,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/logging"
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
 	"github.com/gluzo/integration-gateway/app/routing"
+	"github.com/gluzo/integration-gateway/app/scheduler"
 	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/webhook"
 	"github.com/gluzo/integration-gateway/app/worker"
@@ -158,6 +159,30 @@ func run() error {
 		return err
 	})
 
+	// Periodic work — stock and dispatch sweeps — enters the same queue as a
+	// webhook event, so it travels the same worker, retry, resume and
+	// execution-log path. Nothing bypasses the log.
+	//
+	// No job is registered yet: STOCK_SYNC and SHIPMENT_SYNC arrive in
+	// Phases 4 and 6 of the Vinculum plan. An empty scheduler says so and
+	// returns rather than pretending to run.
+	var periodic *scheduler.Scheduler
+	if cfg.Scheduler.Enabled {
+		periodic, err = scheduler.New(
+			scheduler.NewStore(pool),
+			scheduler.NewRedisLocker(rdb, logger),
+			jobQueue,
+			scheduler.WithPollInterval(cfg.Scheduler.PollInterval),
+			scheduler.WithLockTTL(cfg.Scheduler.LockTTL),
+			scheduler.WithLogger(logger),
+		)
+		if err != nil {
+			return err
+		}
+	} else {
+		logger.Warn("scheduler disabled: this instance publishes no periodic work")
+	}
+
 	var adminHandler *admin.Handler
 	if cfg.Admin.LogViewerToken != "" {
 		var resumer admin.Resumer
@@ -195,7 +220,11 @@ func run() error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		logger.Info("starting gateway", slog.Int("port", cfg.App.Port), slog.Bool("worker", jobWorker != nil), slog.Bool("admin", adminHandler != nil))
+		logger.Info("starting gateway",
+			slog.Int("port", cfg.App.Port),
+			slog.Bool("worker", jobWorker != nil),
+			slog.Bool("scheduler", periodic != nil),
+			slog.Bool("admin", adminHandler != nil))
 		if err := httpserver.Run(ctx, srv, cfg.App.ShutdownTimeout, logger); err != nil {
 			errs <- err
 			stop()
@@ -216,6 +245,13 @@ func run() error {
 		defer wg.Done()
 		retention.Run(ctx, cfg.Storage.LogRetentionInterval)
 	}()
+	if periodic != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			periodic.Run(ctx)
+		}()
+	}
 	wg.Wait()
 	close(errs)
 

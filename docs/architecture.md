@@ -85,6 +85,7 @@ model only.
 | `app/worker` | Queue consumer, recovery of interrupted and transiently failed runs, manual resume | 7 |
 | `app/vendor` | Vendor and origin role contracts, shared types, adapter registry | V0 |
 | `app/integrations/vinculum` | Vinculum eRetail client, DTOs, stock and dispatch read endpoints, mappers | V1 |
+| `app/scheduler` | Periodic job publisher: watermarked state, exclusive claim, Redis lock | V2 |
 | `app/workflowstate` | Atomic file-based and in-memory workflow state repositories | 9 |
 
 Phases 1–12 are the original build. `V0`… are phases of the
@@ -274,6 +275,41 @@ engine, which is why `Route` is its own type and `ordersync` converts
 `workflow.RouteInfo` at one boundary. ADR-013's other decisions — mapping as
 its own action, the prepared document stored opaquely, adding a partner being
 an adapter plus routes — carry over unchanged.
+
+### ADR-018: Periodic work is claimed in the database and locked in Redis
+
+A dropship vendor cannot call us. Vinculum's published specification has no
+callback registration, so stock and dispatch are pulled on a schedule. That
+raises two problems a `time.Ticker` in each replica does not solve.
+
+**Firing once.** The claim is a conditional `UPDATE` on `scheduler_state`,
+which PostgreSQL serialises: the loser's `WHERE next_due_at <= now` no longer
+matches and it gets no row back. The claim lives in the same row as the
+watermark and is written by the same statements, so the two cannot disagree —
+which a separate lock plus a separate watermark can, if a replica dies between
+taking one and writing the other.
+
+**Not overlapping.** The claim cannot stop a run that outlives its own
+interval from being overlapped by the next tick on another replica. That is
+what the Redis lock does, keyed per job name, with a TTL so a crashed replica
+does not block the job forever, and released by a compare-and-delete script so
+a stalled replica cannot drop a lock someone else has since taken. Two
+overlapping stock sweeps would double the load on a vendor whose documented
+limit is 80 calls per five minutes.
+
+**Not skipping.** Work is bounded by the watermark, not by when the process
+woke up, so a tick missed during a deployment is covered by the next run. The
+watermark is seeded when the job is registered rather than after its first
+success: otherwise a job whose first run fails has no watermark, and the run
+after it starts from its own lookback, silently skipping the window most
+likely to have failed. A failed or partial run leaves the watermark alone, so
+the window is covered again; `MaxWindow` caps how much one run may cover and
+leaves the job immediately due, so a long backlog drains in chunks rather than
+in real time.
+
+The scheduler performs no work itself. A due job builds queue jobs and
+publishes them, so scheduled work travels the same worker, retry, resume and
+execution-log path as a webhook event. There is no second execution engine.
 
 ### ADR-008: Integration tests run against a real, embedded PostgreSQL
 

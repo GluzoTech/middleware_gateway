@@ -46,6 +46,9 @@ secret manager. Never commit `.env`.
 | `VINCULUM_LOCATION` | | Default three-character `orderLocation`; a route's vendor reference overrides it |
 | `VINCULUM_SELLABLE_BUCKET` | | Stock bucket the storefront may sell from; blank accepts every bucket |
 | `VINCULUM_TIMEOUT` | `20s` | Per-attempt timeout for Vinculum calls |
+| `SCHEDULER_ENABLED` | `true` | Publish periodic work from this instance |
+| `SCHEDULER_POLL_INTERVAL` | `30s` | How often due jobs are looked for; not a job's own interval |
+| `SCHEDULER_LOCK_TTL` | `5m` | How long a run holds its job lock; must exceed a normal run |
 | `WORKER_ENABLED` | `true` | Run the job worker in this process; `false` gives an intake-only instance |
 | `WORKER_CONCURRENCY` | `4` | Jobs processed concurrently |
 | `WORKER_MAX_AUTO_RESUMES` | `3` | Automatic resumes of a failed run with a transient error |

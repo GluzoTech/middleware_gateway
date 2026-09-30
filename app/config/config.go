@@ -26,16 +26,32 @@ const ServiceName = "gluzo-integration-gateway"
 
 // Config is the fully resolved configuration for one process.
 type Config struct {
-	App      App
-	HTTP     HTTP
-	Database Database
-	Redis    Redis
-	Storage  Storage
-	Queue    Queue
-	Worker   Worker
-	Admin    Admin
-	EasyEcom EasyEcom
-	Vinculum Vinculum
+	App       App
+	HTTP      HTTP
+	Database  Database
+	Redis     Redis
+	Storage   Storage
+	Queue     Queue
+	Worker    Worker
+	Admin     Admin
+	EasyEcom  EasyEcom
+	Vinculum  Vinculum
+	Scheduler Scheduler
+}
+
+// Scheduler tunes the periodic job publisher. Enabled=false leaves periodic
+// work unpublished, which is the right setting for an intake-only instance.
+//
+// PollInterval is not a job's interval: it is how often the loop looks for
+// due work, so a replica that has just started discovers an overdue job
+// within one poll rather than within one job interval.
+//
+// LockTTL bounds how long a crashed replica keeps others out of a job. It
+// must exceed a normal run and stay well under the shortest job interval.
+type Scheduler struct {
+	Enabled      bool
+	PollInterval time.Duration
+	LockTTL      time.Duration
 }
 
 // Admin protects the operator endpoints. An empty token leaves them
@@ -216,6 +232,11 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			LocationKey: r.str("EASYECOM_LOCATION_KEY", ""),
 			Timeout:     r.duration("EASYECOM_TIMEOUT", 15*time.Second),
 		},
+		Scheduler: Scheduler{
+			Enabled:      r.bool("SCHEDULER_ENABLED", true),
+			PollInterval: r.duration("SCHEDULER_POLL_INTERVAL", 30*time.Second),
+			LockTTL:      r.duration("SCHEDULER_LOCK_TTL", 5*time.Minute),
+		},
 		Vinculum: Vinculum{
 			BaseURL:        r.str("VINCULUM_BASE_URL", "https://erp.vineretail.com"),
 			APIOwner:       r.str("VINCULUM_API_OWNER", ""),
@@ -300,6 +321,8 @@ func (c *Config) Validate() error {
 		{"REDIS_CONNECT_TIMEOUT", c.Redis.ConnectTimeout},
 		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
 		{"VINCULUM_TIMEOUT", c.Vinculum.Timeout},
+		{"SCHEDULER_POLL_INTERVAL", c.Scheduler.PollInterval},
+		{"SCHEDULER_LOCK_TTL", c.Scheduler.LockTTL},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
 		{"LOG_RETENTION_INTERVAL", c.Storage.LogRetentionInterval},

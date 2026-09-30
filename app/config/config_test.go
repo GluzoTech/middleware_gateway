@@ -102,6 +102,25 @@ func TestLoadFrom(t *testing.T) {
 			},
 		},
 		{
+			name: "scheduler settings are read",
+			env: merge(base, map[string]string{
+				"SCHEDULER_ENABLED":       "false",
+				"SCHEDULER_POLL_INTERVAL": "10s",
+				"SCHEDULER_LOCK_TTL":      "2m",
+			}),
+			check: func(t *testing.T, cfg *config.Config) {
+				s := cfg.Scheduler
+				if s.Enabled || s.PollInterval != 10*time.Second || s.LockTTL != 2*time.Minute {
+					t.Errorf("scheduler config = %+v", s)
+				}
+			},
+		},
+		{
+			name:    "scheduler lock ttl must be positive",
+			env:     merge(base, map[string]string{"SCHEDULER_LOCK_TTL": "0s"}),
+			wantErr: "SCHEDULER_LOCK_TTL must be a positive duration",
+		},
+		{
 			name:    "vinculum timeout must be positive",
 			env:     merge(base, map[string]string{"VINCULUM_TIMEOUT": "0s"}),
 			wantErr: "VINCULUM_TIMEOUT must be a positive duration",
