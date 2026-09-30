@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -21,18 +22,18 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/gluzo/integration-gateway/app/admin"
-	"github.com/gluzo/integration-gateway/app/apperror"
 	"github.com/gluzo/integration-gateway/app/auth"
-	"github.com/gluzo/integration-gateway/app/domain/order"
 	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpclient"
 	"github.com/gluzo/integration-gateway/app/httpserver"
 	"github.com/gluzo/integration-gateway/app/idempotency"
 	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
+	"github.com/gluzo/integration-gateway/app/integrations/vinculum"
 	"github.com/gluzo/integration-gateway/app/intlog"
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
 	"github.com/gluzo/integration-gateway/app/routing"
+	"github.com/gluzo/integration-gateway/app/skumap"
 	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/webhook"
 	"github.com/gluzo/integration-gateway/app/worker"
@@ -49,6 +50,8 @@ const (
 	// from the vendor-side one because they name different ends of the route.
 	e2eOriginLocation = "bcpl-location-key"
 	e2eVendor         = "vinculum"
+	e2eVinculumOwner  = "e2e-vinculum-owner"
+	e2eVinculumKey    = "e2e-vinculum-key"
 	e2eAdminToken     = "admin-e2e-token"
 	e2eEasyJWT        = "e2e-easyecom-jwt-token"
 	e2eEasyAPIKey     = "e2e-easyecom-api-key"
@@ -87,53 +90,86 @@ func newFakeEasyEcomAPI(t *testing.T) *fakeEasyEcomAPI {
 	return f
 }
 
-// stubVendor stands in for a fulfilment partner until the Vinculum adapter
-// exists. It implements all three vendor roles so that the registry's
-// capability discovery is exercised, and fails order submission as many
-// times as failSubmits says.
+// fakeVinculumAPI is a Vinculum eRetail server good enough to drive the real
+// adapter: it authenticates the two static headers, rejects an order number
+// it already holds, and can be made unavailable for a fixed number of
+// attempts.
 //
-// Phase 5 replaces this with a fake Vinculum HTTP server, which restores
-// transport-level coverage of the real adapter.
-type stubVendor struct {
-	failSubmits atomic.Int32
-	submitCalls atomic.Int32
-	created     atomic.Bool
-	location    atomic.Value
+// Phase 0 replaced the fake Uniware server with an in-process stub so that
+// phase could run at all, and promised to restore transport-level coverage
+// here. This is that: the scenario now exercises the real client, the real
+// mapper and the real duplicate handling, over HTTP.
+type fakeVinculumAPI struct {
+	t   *testing.T
+	srv *httptest.Server
+
+	createCalls atomic.Int32
+	failCreates atomic.Int32
+
+	mu sync.Mutex
+	// orders is the vendor's order book, keyed by the order number the
+	// gateway sent. A second submission of the same number is a duplicate.
+	orders map[string]map[string]any
 }
 
-func (s *stubVendor) Platform() string { return e2eVendor }
+func newFakeVinculumAPI(t *testing.T) *fakeVinculumAPI {
+	f := &fakeVinculumAPI{t: t, orders: map[string]map[string]any{}}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/RestWS/api/eretail/v4/order/create", func(w http.ResponseWriter, r *http.Request) {
+		f.createCalls.Add(1)
+		if r.Header.Get("ApiOwner") != e2eVinculumOwner || r.Header.Get("ApiKey") != e2eVinculumKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if f.failCreates.Load() > 0 {
+			f.failCreates.Add(-1)
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		orderNo, _ := body["orderNo"].(string)
 
-func (s *stubVendor) PrepareOrder(_ context.Context, o order.Order, route vendor.Route) (json.RawMessage, error) {
-	return json.Marshal(map[string]any{
-		"orderNo":       o.ExternalID,
-		"orderLocation": route.VendorReference,
-		"orderAmount":   []map[string]any{{"lineno": 1, "sku": o.Items[0].SKU, "orderQty": o.Items[0].Quantity}},
+		f.mu.Lock()
+		_, already := f.orders[orderNo]
+		if !already {
+			f.orders[orderNo] = body
+		}
+		f.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		if already {
+			// The rejection that makes submission idempotent.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"responseCode":    101,
+				"responseMessage": "Duplicate order no " + orderNo + " already exists",
+			})
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"responseCode": 0, "responseMessage": "SUCCESS", "orderNo": orderNo,
+		})
 	})
+	f.srv = httptest.NewServer(mux)
+	t.Cleanup(f.srv.Close)
+	return f
 }
 
-func (s *stubVendor) SubmitOrder(_ context.Context, prepared json.RawMessage, o order.Order, route vendor.Route) (vendor.OrderAck, error) {
-	s.submitCalls.Add(1)
-	s.location.Store(route.VendorReference)
-	if s.failSubmits.Load() > 0 {
-		s.failSubmits.Add(-1)
-		err := apperror.New(apperror.ExternalAPI, "vendor unavailable")
-		err.Retryable = true
-		return vendor.OrderAck{}, err
-	}
-	var doc struct {
-		OrderNo string `json:"orderNo"`
-	}
-	_ = json.Unmarshal(prepared, &doc)
-	s.created.Store(true)
-	return vendor.OrderAck{VendorOrderID: doc.OrderNo, Created: true}, nil
+// order returns the document the vendor stored for an order number.
+func (f *fakeVinculumAPI) order(orderNo string) (map[string]any, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	doc, ok := f.orders[orderNo]
+	return doc, ok
 }
 
-func (s *stubVendor) FetchStock(context.Context, vendor.Route, vendor.StockCursor) (vendor.StockPage, error) {
-	return vendor.StockPage{}, nil
-}
-
-func (s *stubVendor) FetchShipments(context.Context, vendor.Route, vendor.Window) (vendor.ShipmentPage, error) {
-	return vendor.ShipmentPage{}, nil
+func (f *fakeVinculumAPI) orderCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.orders)
 }
 
 // ensurePlatform creates the named platform or, when it already exists in a
@@ -232,11 +268,40 @@ func TestEndToEndOrderSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("easyecom.NewClient: %v", err)
 	}
-	vnd := &stubVendor{}
+	vinAPI := newFakeVinculumAPI(t)
+	vinClient, err := vinculum.NewClient(vinculum.Config{
+		BaseURL: vinAPI.srv.URL, APIOwner: e2eVinculumOwner, APIKey: e2eVinculumKey,
+		Location: e2eLocation, SellableBucket: "Good",
+	}, vinculum.WithLogger(logger), vinculum.WithHTTPOptions(
+		httpclient.WithSleep(noSleep),
+		// The transport's own retry is off here so that the outage is
+		// counted by the workflow's submit budget rather than absorbed
+		// below it. This scenario is about resume, not about the HTTP
+		// client's backoff, which has its own tests.
+		httpclient.WithRetryPolicy(httpclient.NoRetry()),
+	))
+	if err != nil {
+		t.Fatalf("vinculum.NewClient: %v", err)
+	}
+	vnd, err := vinculum.NewVendor(vinClient, logger)
+	if err != nil {
+		t.Fatalf("vinculum.NewVendor: %v", err)
+	}
 	vendors := vendor.NewRegistry()
 	if err := vendors.Register(vnd); err != nil {
 		t.Fatalf("register vendor: %v", err)
 	}
+
+	// The order is placed under Gluzo's SKU and sent under the vendor's, so
+	// the pipeline needs a mapping for every SKU the order carries. A real
+	// store rather than the in-memory one: the SKU map is a table the
+	// workflow reads at run time, and the scenario is meant to exercise
+	// everything the deployment actually does.
+	mappings := skumap.NewStore(pool)
+	if _, err := mappings.Add(ctx, integ.Name, "BCPL-E2E", "VIN-E2E", 0); err != nil {
+		t.Fatalf("skumap.Add: %v", err)
+	}
+	skus := mappings
 
 	// Workflow with a small submit budget so the outage exhausts it quickly.
 	policies := ordersync.DefaultPolicies()
@@ -248,6 +313,7 @@ func TestEndToEndOrderSync(t *testing.T) {
 		Resolver: routes,
 		Origins:  map[string]vendor.Origin{easyecom.PlatformName: easyecom.NewSource(easyClient, logger)},
 		Vendors:  vendors,
+		SKUs:     skus,
 		Policies: &policies,
 		Logger:   logger,
 	})
@@ -305,7 +371,7 @@ func TestEndToEndOrderSync(t *testing.T) {
 	}
 
 	// 1. EasyEcom sends ORDER_CREATED, twice (a redelivery).
-	vnd.failSubmits.Store(2) // the vendor is down for the first two attempts
+	vinAPI.failCreates.Store(2) // the vendor is down for the first two attempts
 	combined := map[string]string{auth.CombinedCredentialHeader: platformKey + ":" + accessToken}
 	first := post("/webhooks/easyecom", e2eWebhookOrders, combined)
 	if first.Code != http.StatusAccepted {
@@ -366,8 +432,8 @@ func TestEndToEndOrderSync(t *testing.T) {
 	if rec, err := idem.Get(ctx, "easyecom:ORDER_CREATED:"+e2eOrderID); err != nil || rec.Status != idempotency.StatusFailed {
 		t.Fatalf("idempotency after failure: %+v %v", rec, err)
 	}
-	if vnd.submitCalls.Load() != 2 || easyAPI.orderCalls.Load() != 1 {
-		t.Fatalf("calls before restart: submit=%d fetch=%d", vnd.submitCalls.Load(), easyAPI.orderCalls.Load())
+	if vinAPI.createCalls.Load() != 2 || easyAPI.orderCalls.Load() != 1 {
+		t.Fatalf("calls before restart: submit=%d fetch=%d", vinAPI.createCalls.Load(), easyAPI.orderCalls.Load())
 	}
 
 	// 3. The application restarts: startup recovery resumes the run from the
@@ -388,11 +454,37 @@ func TestEndToEndOrderSync(t *testing.T) {
 	if completed.Result(workflow.ResultDestinationOrderID) != e2eOrderID || completed.Result(ordersync.ResultVendorOrderCreated) != "true" {
 		t.Fatalf("results: %v", completed.Results)
 	}
-	if vnd.submitCalls.Load() != 3 || easyAPI.orderCalls.Load() != 1 {
-		t.Fatalf("calls after restart: submit=%d fetch=%d (resume must not replay FETCH_ORDER)", vnd.submitCalls.Load(), easyAPI.orderCalls.Load())
+	if vinAPI.createCalls.Load() != 3 || easyAPI.orderCalls.Load() != 1 {
+		t.Fatalf("calls after restart: submit=%d fetch=%d (resume must not replay FETCH_ORDER)", vinAPI.createCalls.Load(), easyAPI.orderCalls.Load())
 	}
-	if got, _ := vnd.location.Load().(string); got != e2eLocation {
+
+	// Three submission attempts, one order at the vendor. The resumed run
+	// did not duplicate, and it did not need the gateway to remember that:
+	// the order number is Gluzo's own, so a repeat is the vendor's to reject.
+	if got := vinAPI.orderCount(); got != 1 {
+		t.Fatalf("the vendor holds %d orders after 3 submissions, want 1", got)
+	}
+	doc, ok := vinAPI.order(e2eOrderID)
+	if !ok {
+		t.Fatalf("the vendor does not hold order %s", e2eOrderID)
+	}
+	if got, _ := doc["orderLocation"].(string); got != e2eLocation {
 		t.Fatalf("vendor location = %q, want the route's vendor reference", got)
+	}
+	// The vendor must be offered its own item code, not Gluzo's. Translated
+	// through the real sku_map table, so this also proves the workflow reads
+	// the store rather than passing the SKU through.
+	orderLines, _ := doc["orderAmount"].([]any)
+	if len(orderLines) != 1 {
+		t.Fatalf("vendor received %d lines, want 1", len(orderLines))
+	}
+	line, _ := orderLines[0].(map[string]any)
+	if got, _ := line["sku"].(string); got != "VIN-E2E" {
+		t.Fatalf("vendor was offered sku %q, want the mapped VIN-E2E", got)
+	}
+	// Line numbers are what Phase 6 will attribute a dispatch by.
+	if got, _ := line["lineno"].(float64); int(got) != 1 {
+		t.Fatalf("line number = %v, want 1", line["lineno"])
 	}
 	if rec, err := idem.Get(ctx, "easyecom:ORDER_CREATED:"+e2eOrderID); err != nil || rec.Status != idempotency.StatusCompleted {
 		t.Fatalf("idempotency after completion: %+v %v", rec, err)

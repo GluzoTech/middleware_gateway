@@ -81,7 +81,7 @@ model only.
 | `app/webhook` | Platform-neutral event model, validation, intake handler | 3 |
 | `app/routing` | Database-backed integration routing scoped to the authenticated integration | 5 |
 | `app/workflow` | Workflow engine: state, actions, policies, registry, executor with per-action retry and resume | 6 |
-| `app/workflow/ordersync` | The ORDER_SYNC workflow, built on the `app/vendor` roles | 6, V0 |
+| `app/workflow/ordersync` | ORDER_SYNC: routes, fetches, translates SKUs, maps and submits | 6, V0, V5 |
 | `app/worker` | Queue consumer, recovery of interrupted and transiently failed runs, manual resume | 7 |
 | `app/vendor` | Vendor and origin role contracts, shared types, adapter registry | V0 |
 | `app/integrations/vinculum` | Vinculum eRetail client, DTOs, stock and dispatch read endpoints, mappers | V1 |

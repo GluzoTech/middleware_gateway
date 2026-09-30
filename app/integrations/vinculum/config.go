@@ -51,6 +51,20 @@ type Config struct {
 	// safe reading for a read-only phase but not for a push.
 	SellableBucket string
 
+	// DuplicateOrderCodes are the responseCode values Vinculum returns when
+	// an order number already exists. Empty falls back to keyword matching
+	// on the vendor's message.
+	//
+	// TODO(VERIFY): BCPL open item. The specification states that a
+	// duplicate is rejected but does not give the code or the wording.
+	DuplicateOrderCodes []string
+
+	// OrderRateLimit and OrderRateWindow bound order creation. Vinculum
+	// documents 80 calls per 5 minutes on that endpoint; zero uses the
+	// documented figures.
+	OrderRateLimit  int
+	OrderRateWindow time.Duration
+
 	Timeout time.Duration
 }
 
@@ -71,6 +85,12 @@ func (c Config) Validate() error {
 	}
 	if c.Timeout < 0 {
 		errs = append(errs, errors.New("vinculum: timeout must not be negative"))
+	}
+	if c.OrderRateLimit < 0 {
+		errs = append(errs, errors.New("vinculum: order rate limit must not be negative"))
+	}
+	if c.OrderRateWindow < 0 {
+		errs = append(errs, errors.New("vinculum: order rate window must not be negative"))
 	}
 	return errors.Join(errs...)
 }

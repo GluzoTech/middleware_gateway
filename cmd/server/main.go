@@ -323,7 +323,12 @@ func buildWorker(
 			APIKey:         cfg.Vinculum.APIKey,
 			Location:       cfg.Vinculum.Location,
 			SellableBucket: cfg.Vinculum.SellableBucket,
-			Timeout:        cfg.Vinculum.Timeout,
+
+			DuplicateOrderCodes: cfg.Vinculum.DuplicateOrderCodes,
+			OrderRateLimit:      cfg.Vinculum.OrderRateLimit,
+			OrderRateWindow:     cfg.Vinculum.OrderRateWindow,
+
+			Timeout: cfg.Vinculum.Timeout,
 		}, vinculum.WithLogger(logger))
 		if err != nil {
 			return nil, fmt.Errorf("configure Vinculum client (leave VINCULUM_API_OWNER empty for an instance with no vendor): %w", err)
@@ -377,6 +382,7 @@ func buildWorker(
 			Resolver: routes,
 			Origins:  map[string]vendor.Origin{easyecom.PlatformName: easyecom.NewSource(easyecomClient, logger)},
 			Vendors:  vendors,
+			SKUs:     skumap.NewStore(pool),
 			Logger:   logger,
 		})
 		if err != nil {

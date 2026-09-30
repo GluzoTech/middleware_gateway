@@ -127,6 +127,16 @@ type Vinculum struct {
 	Location       string
 	SellableBucket string
 
+	// DuplicateOrderCodes are the responseCode values that mean "this order
+	// number already exists". Empty falls back to matching the vendor's
+	// message; failing to recognise a duplicate is safe, because Vinculum
+	// does the rejecting and the run fails visibly rather than duplicating.
+	DuplicateOrderCodes []string
+	// OrderRateLimit and OrderRateWindow bound order creation. Vinculum
+	// documents 80 calls per 5 minutes.
+	OrderRateLimit  int
+	OrderRateWindow time.Duration
+
 	Timeout time.Duration
 }
 
@@ -258,7 +268,12 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			APIKey:         r.str("VINCULUM_API_KEY", ""),
 			Location:       r.str("VINCULUM_LOCATION", ""),
 			SellableBucket: r.str("VINCULUM_SELLABLE_BUCKET", ""),
-			Timeout:        r.duration("VINCULUM_TIMEOUT", 20*time.Second),
+
+			DuplicateOrderCodes: r.list("VINCULUM_DUPLICATE_ORDER_CODES"),
+			OrderRateLimit:      r.int("VINCULUM_ORDER_RATE_LIMIT", 80),
+			OrderRateWindow:     r.duration("VINCULUM_ORDER_RATE_WINDOW", 5*time.Minute),
+
+			Timeout: r.duration("VINCULUM_TIMEOUT", 20*time.Second),
 		},
 	}
 
@@ -316,6 +331,9 @@ func (c *Config) Validate() error {
 	if c.Queue.MaxLen < 1 {
 		errs = append(errs, errors.New("QUEUE_MAX_LEN must be at least 1"))
 	}
+	if c.Vinculum.OrderRateLimit < 1 {
+		errs = append(errs, errors.New("VINCULUM_ORDER_RATE_LIMIT must be at least 1"))
+	}
 	if c.Worker.Concurrency < 1 {
 		errs = append(errs, errors.New("WORKER_CONCURRENCY must be at least 1"))
 	}
@@ -336,6 +354,7 @@ func (c *Config) Validate() error {
 		{"REDIS_CONNECT_TIMEOUT", c.Redis.ConnectTimeout},
 		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
 		{"VINCULUM_TIMEOUT", c.Vinculum.Timeout},
+		{"VINCULUM_ORDER_RATE_WINDOW", c.Vinculum.OrderRateWindow},
 		{"SCHEDULER_POLL_INTERVAL", c.Scheduler.PollInterval},
 		{"SCHEDULER_LOCK_TTL", c.Scheduler.LockTTL},
 		{"STOCK_SYNC_INTERVAL", c.Scheduler.StockInterval},
@@ -377,6 +396,22 @@ func (r *reader) str(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// list reads a comma-separated value into a slice, dropping blanks. Absent
+// and empty both give nil, so "not configured" is one case rather than two.
+func (r *reader) list(key string) []string {
+	v, ok := r.raw(key)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func (r *reader) int(key string, def int) int {

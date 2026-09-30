@@ -17,15 +17,19 @@ package ordersync
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/gluzo/integration-gateway/app/apperror"
+	"github.com/gluzo/integration-gateway/app/domain/order"
 	"github.com/gluzo/integration-gateway/app/routing"
+	"github.com/gluzo/integration-gateway/app/skumap"
 	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/workflow"
 )
@@ -44,7 +48,11 @@ const (
 // State keys.
 const (
 	PayloadVendorOrderRequest = "vendor_order_request"
-	ResultVendorOrderCreated  = "vendor_order_created"
+	// PayloadVendorOrderLines records which vendor SKU each line number
+	// carries. Vinculum's shipment response is line-level, so without this
+	// a dispatch in Phase 6 cannot be attributed to the item that shipped.
+	PayloadVendorOrderLines  = "vendor_order_lines"
+	ResultVendorOrderCreated = "vendor_order_created"
 )
 
 // Policies lets deployments tune retry behaviour per action.
@@ -61,8 +69,11 @@ func DefaultPolicies() Policies {
 	return Policies{
 		Resolve: workflow.Policy{MaxAttempts: 3, Timeout: 10 * time.Second, BaseDelay: time.Second, MaxDelay: 5 * time.Second},
 		Fetch:   workflow.DefaultPolicy(),
-		Map:     workflow.NoRetry(),
-		Submit:  workflow.Policy{MaxAttempts: 5, Timeout: 45 * time.Second, BaseDelay: 2 * time.Second, MaxDelay: 30 * time.Second},
+		// MAP_ORDER reads the SKU map, so a transient database failure must
+		// not fail the order permanently. A mapping error is non-retryable
+		// in itself and is not retried whatever this budget allows.
+		Map:    workflow.Policy{MaxAttempts: 3, Timeout: 15 * time.Second, BaseDelay: time.Second, MaxDelay: 5 * time.Second},
+		Submit: workflow.Policy{MaxAttempts: 5, Timeout: 45 * time.Second, BaseDelay: 2 * time.Second, MaxDelay: 30 * time.Second},
 	}
 }
 
@@ -74,7 +85,10 @@ type Dependencies struct {
 	// Vendors holds the fulfilment partner adapters. ORDER_SYNC needs the
 	// OrderReceiver role; a vendor registered without it is rejected during
 	// routing rather than at submission.
-	Vendors  *vendor.Registry
+	Vendors *vendor.Registry
+	// SKUs translates Gluzo's SKUs into the vendor's item codes. An order
+	// is placed under Gluzo's code and must be sent under the vendor's.
+	SKUs     skumap.Reader
 	Policies *Policies
 	Logger   *slog.Logger
 }
@@ -92,6 +106,9 @@ func New(deps Dependencies) (*workflow.Definition, error) {
 	}
 	if len(deps.Vendors.Platforms()) == 0 {
 		return nil, errors.New("ordersync: at least one vendor adapter must be registered")
+	}
+	if deps.SKUs == nil {
+		return nil, errors.New("ordersync: a SKU map reader is required")
 	}
 	policies := DefaultPolicies()
 	if deps.Policies != nil {
@@ -209,7 +226,13 @@ func (w *orderSync) mapOrder(ctx context.Context, state *workflow.State) error {
 	if err != nil {
 		return err
 	}
-	doc, err := receiver.PrepareOrder(ctx, *state.Order, route)
+
+	translated, lines, err := w.translateSKUs(ctx, *state.Order, route)
+	if err != nil {
+		return err
+	}
+
+	doc, err := receiver.PrepareOrder(ctx, translated, route)
 	if err != nil {
 		return err
 	}
@@ -217,7 +240,73 @@ func (w *orderSync) mapOrder(ctx context.Context, state *workflow.State) error {
 		return apperror.New(apperror.Mapping, "vendor produced an empty order document")
 	}
 	state.SetPayload(PayloadVendorOrderRequest, doc)
+
+	// Persisted rather than recomputed, because the SKU map can change
+	// between this run and the dispatch that refers to its line numbers.
+	if encoded, err := json.Marshal(lines); err == nil {
+		state.SetPayload(PayloadVendorOrderLines, encoded)
+	}
 	return nil
+}
+
+// OrderLine records what one line number was sent as.
+type OrderLine struct {
+	LineNo    int    `json:"lineno"`
+	GluzoSKU  string `json:"gluzo_sku"`
+	VendorSKU string `json:"vendor_sku"`
+	Quantity  int    `json:"quantity"`
+}
+
+// translateSKUs returns a copy of the order with vendor item codes, and the
+// record of what each line became.
+//
+// A copy, because state.Order stays the origin's view of the order: it is
+// what the execution log shows and what an operator recognises. Overwriting
+// its SKUs would make the log describe an order EasyEcom never had.
+func (w *orderSync) translateSKUs(ctx context.Context, o order.Order, route vendor.Route) (order.Order, []OrderLine, error) {
+	integrationID, err := uuid.Parse(route.IntegrationID)
+	if err != nil {
+		return order.Order{}, nil, apperror.Wrap(apperror.Workflow, "route carries an invalid integration id", err)
+	}
+	mappings, err := w.deps.SKUs.Active(ctx, integrationID)
+	if err != nil {
+		return order.Order{}, nil, apperror.Wrap(apperror.Internal, "load sku map", err)
+	}
+	index := skumap.NewIndex(mappings)
+
+	translated := o
+	translated.Items = make([]order.Item, len(o.Items))
+	lines := make([]OrderLine, 0, len(o.Items))
+	var unmapped []string
+
+	for i, item := range o.Items {
+		mapping, err := index.ToVendor(item.SKU)
+		if err != nil {
+			unmapped = append(unmapped, item.SKU)
+			continue
+		}
+		translated.Items[i] = item
+		translated.Items[i].SKU = mapping.VendorSKU
+		lines = append(lines, OrderLine{
+			LineNo:    i + 1,
+			GluzoSKU:  item.SKU,
+			VendorSKU: mapping.VendorSKU,
+			Quantity:  item.Quantity,
+		})
+	}
+
+	if len(unmapped) > 0 {
+		// Never partial. Sending the mapped lines and dropping the rest
+		// would ship the customer part of their order and leave no record
+		// that the remainder was never offered to anyone.
+		e := apperror.New(apperror.Mapping, fmt.Sprintf(
+			"order %s has %d sku(s) with no active mapping for integration %s: %s",
+			o.ExternalID, len(unmapped), route.IntegrationName, strings.Join(unmapped, ", ")))
+		e.Integration = route.VendorPlatform
+		e.Operation = ActionMapOrder
+		return order.Order{}, nil, e
+	}
+	return translated, lines, nil
 }
 
 func (w *orderSync) submitVendorOrder(ctx context.Context, state *workflow.State) error {

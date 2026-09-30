@@ -163,7 +163,7 @@ func TestFetchStockRejectsAnIncompleteRoute(t *testing.T) {
 	}
 }
 
-func TestVendorRegistersAsAStockProviderOnly(t *testing.T) {
+func TestVendorRegistersUnderTheRolesItImplements(t *testing.T) {
 	f := newFakeVinculum(t)
 	v := f.vendor(t)
 
@@ -174,14 +174,20 @@ func TestVendorRegistersAsAStockProviderOnly(t *testing.T) {
 	if _, err := reg.StockProvider(vinculum.PlatformName); err != nil {
 		t.Errorf("StockProvider: %v", err)
 	}
-	// Asking for a role this vendor does not implement must be a different
-	// error from asking for an unknown vendor: they are different operator
-	// mistakes. OrderReceiver arrives in Phase 5.
-	if _, err := reg.OrderReceiver(vinculum.PlatformName); err == nil {
-		t.Error("this vendor cannot yet receive orders")
-	} else if _, unknown := reg.OrderReceiver("no-such-vendor"); unknown == nil {
-		t.Error("an unknown vendor must also error")
-	} else if err.Error() == unknown.Error() {
-		t.Errorf("a missing role and an unknown vendor report the same error: %v", err)
+	if _, err := reg.OrderReceiver(vinculum.PlatformName); err != nil {
+		t.Errorf("OrderReceiver: %v", err)
+	}
+
+	// Dispatch is Phase 6. Asking for a role this vendor does not implement
+	// must be a different error from asking for an unknown vendor: they are
+	// different operator mistakes and are fixed differently.
+	missingRole, errRole := reg.FulfilmentProvider(vinculum.PlatformName)
+	if errRole == nil {
+		t.Fatalf("this vendor does not yet provide dispatch records, got %v", missingRole)
+	}
+	if _, errUnknown := reg.FulfilmentProvider("no-such-vendor"); errUnknown == nil {
+		t.Fatal("an unknown vendor must also error")
+	} else if errRole.Error() == errUnknown.Error() {
+		t.Errorf("a missing role and an unknown vendor report the same error: %v", errRole)
 	}
 }

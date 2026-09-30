@@ -15,6 +15,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/intlog"
 	"github.com/gluzo/integration-gateway/app/routing"
+	"github.com/gluzo/integration-gateway/app/skumap"
 	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/workflow"
 	"github.com/gluzo/integration-gateway/app/workflow/ordersync"
@@ -77,6 +78,7 @@ func (stockOnlyVendor) FetchStock(context.Context, vendor.Route, vendor.StockCur
 
 type fixture struct {
 	integ    uuid.UUID
+	skus     *skumap.MemoryReader
 	resolver *routing.MemoryResolver
 	origin   *fakeOrigin
 	vnd      *fakeVendor
@@ -91,6 +93,7 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	f := &fixture{
 		integ:    uuid.New(),
+		skus:     skumap.NewMemoryReader(),
 		resolver: routing.NewMemoryResolver(),
 		origin:   &fakeOrigin{},
 		vnd:      &fakeVendor{created: true},
@@ -101,6 +104,11 @@ func newFixture(t *testing.T) *fixture {
 	if err := f.vendors.Register(f.vnd); err != nil {
 		t.Fatalf("register vendor: %v", err)
 	}
+	// An order is placed under Gluzo's SKU and sent under the vendor's, so
+	// every SKU the fixture's order carries needs a mapping.
+	f.skus.Set(f.integ, []skumap.Mapping{
+		{GluzoSKU: "A", VendorSKU: "BCPL-A", Status: skumap.StatusActive},
+	})
 	f.resolver.Add(routing.Resolution{
 		Route:               routing.Route{ID: uuid.New(), IntegrationID: f.integ, Type: "warehouse_id", Value: "12345", DestinationReference: "BLR"},
 		IntegrationID:       f.integ,
@@ -116,6 +124,7 @@ func newFixture(t *testing.T) *fixture {
 		Resolver: f.resolver,
 		Origins:  map[string]vendor.Origin{"easyecom": f.origin},
 		Vendors:  f.vendors,
+		SKUs:     f.skus,
 		Policies: &policies,
 	})
 	if err != nil {
@@ -331,6 +340,7 @@ func TestResolverOutageIsRetryable(t *testing.T) {
 		Resolver: brokenResolver{},
 		Origins:  map[string]vendor.Origin{"easyecom": f.origin},
 		Vendors:  f.vendors,
+		SKUs:     f.skus,
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

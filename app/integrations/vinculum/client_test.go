@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -32,6 +33,16 @@ type fakeVinculum struct {
 
 	stockCalls    atomic.Int32
 	shipmentCalls atomic.Int32
+	orderCalls    atomic.Int32
+
+	// mu guards the order book below; the atomics above need no lock.
+	mu sync.Mutex
+	// orders holds the order numbers the vendor has accepted, which is what
+	// makes a second submission of the same number a duplicate.
+	orders map[string]bool
+	// orderRejection, when set, is returned as an envelope failure for every
+	// order instead of accepting it.
+	orderRejection string
 
 	lastStockBody    atomic.Value // map[string]any
 	lastShipmentBody atomic.Value // map[string]any
@@ -55,7 +66,7 @@ type fakeVinculum struct {
 }
 
 func newFakeVinculum(t *testing.T) *fakeVinculum {
-	f := &fakeVinculum{t: t}
+	f := &fakeVinculum{t: t, orders: map[string]bool{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/RestWS/api/eretail/v4/stock/getWhInventory", func(w http.ResponseWriter, r *http.Request) {
 		f.stockCalls.Add(1)
@@ -108,6 +119,39 @@ func newFakeVinculum(t *testing.T) *fakeVinculum {
 			}},
 		})
 	})
+	mux.HandleFunc("/RestWS/api/eretail/v4/order/create", func(w http.ResponseWriter, r *http.Request) {
+		f.orderCalls.Add(1)
+		body := f.begin(w, r)
+		if body == nil {
+			return
+		}
+		orderNo, _ := body["orderNo"].(string)
+
+		f.mu.Lock()
+		rejection := f.orderRejection
+		already := f.orders[orderNo]
+		if rejection == "" && !already {
+			f.orders[orderNo] = true
+		}
+		f.mu.Unlock()
+
+		switch {
+		case rejection != "":
+			f.writeJSON(w, map[string]any{"responseCode": 120, "responseMessage": rejection})
+		case already:
+			// Vinculum rejects an order number it already holds. That
+			// rejection is what makes SubmitOrder idempotent.
+			f.writeJSON(w, map[string]any{
+				"responseCode":    101,
+				"responseMessage": "Duplicate order no " + orderNo + " already exists",
+			})
+		default:
+			f.writeJSON(w, map[string]any{
+				"responseCode": 0, "responseMessage": "SUCCESS", "orderNo": orderNo,
+			})
+		}
+	})
+
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
@@ -540,4 +584,15 @@ func (f *fakeVinculum) vendor(t *testing.T) *vinculum.Vendor {
 		t.Fatalf("NewVendor: %v", err)
 	}
 	return v
+}
+
+// createdOrders reports the order numbers the vendor holds.
+func (f *fakeVinculum) createdOrders() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, 0, len(f.orders))
+	for no := range f.orders {
+		out = append(out, no)
+	}
+	return out
 }

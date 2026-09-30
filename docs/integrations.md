@@ -240,6 +240,7 @@ they are wrong and asking again would only be told the same thing.
 | --- | --- | --- |
 | `GetWhInventory` | `POST /RestWS/api/eretail/v4/stock/getWhInventory` | Field names per the published specification |
 | `ShipmentDetail` | `POST /RestWS/api/eretail/v1/order/shipmentDetail` | Field names per the published specification |
+| `CreateOrder` | `POST /RestWS/api/eretail/v4/order/create` | Header and line field names per the specification; **the `ship*` address field names are not enumerated there and are unverified** |
 
 Both page. `hasMore` drives the stock sweep, `pageNumber` the shipment sweep,
 and each `FetchAll*` helper stops at a page ceiling rather than trusting a
@@ -270,6 +271,9 @@ others, so the `dto.Flex*` types accept both.
 | `reqType`, `filterBy`, `fulfillmentLocation`, `status[]` | Documented parameters with no published value set. Passed through when set, omitted when not, so a value BCPL supply later needs no code change. |
 | Sellable `bucket` value | BCPL open item 2. Blank accepts every bucket, which is right for reading and wrong for pushing. Phase 4 requires it. |
 | `qty` versus `committedQty` | Assumption A1. See below. |
+| The `ship*` address field names | Not enumerated in the specification. The nine fields follow the documented prefix. **This is the one unverified item here that fails quietly** — Vinculum would accept an order and ship it with a field missing. |
+| The duplicate-order rejection | The specification states that a duplicate is rejected but gives neither code nor wording. Matched by keyword, overridable with `VINCULUM_DUPLICATE_ORDER_CODES`. Failing to recognise one is safe: the run fails visibly and the vendor did the rejecting, so nothing is duplicated. |
+| `orderType`, `paymentType` values | Named as header fields without an enumerated set. One constant each. |
 
 Test payloads under `app/integrations/vinculum/mapper/testdata/` are built
 from the specification, not captured from BCPL: no test credentials have been

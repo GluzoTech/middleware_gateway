@@ -46,6 +46,9 @@ secret manager. Never commit `.env`.
 | `VINCULUM_LOCATION` | | Default three-character `orderLocation`; a route's vendor reference overrides it |
 | `VINCULUM_SELLABLE_BUCKET` | | Stock bucket the storefront may sell from; blank accepts every bucket |
 | `VINCULUM_TIMEOUT` | `20s` | Per-attempt timeout for Vinculum calls |
+| `VINCULUM_ORDER_RATE_LIMIT` | `80` | Maximum order creations per window (Vinculum's documented ceiling) |
+| `VINCULUM_ORDER_RATE_WINDOW` | `5m` | The window that limit applies over |
+| `VINCULUM_DUPLICATE_ORDER_CODES` | | Comma-separated `responseCode` values meaning "order already exists"; empty falls back to matching the vendor's message |
 | `SCHEDULER_ENABLED` | `true` | Publish periodic work from this instance |
 | `SCHEDULER_POLL_INTERVAL` | `30s` | How often due jobs are looked for; not a job's own interval |
 | `SCHEDULER_LOCK_TTL` | `5m` | How long a run holds its job lock; must exceed a normal run |

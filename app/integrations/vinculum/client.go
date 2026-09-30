@@ -20,6 +20,12 @@ type Client struct {
 	http   *httpclient.Client
 	cfg    Config
 	logger *slog.Logger
+
+	// orderLimiter enforces the documented ceiling on order creation. It is
+	// per client, and therefore per process: see the Phase 5 note on
+	// several replicas.
+	orderLimiter   *rateLimiter
+	duplicateCodes []string
 }
 
 // Option configures a Client.
@@ -70,7 +76,13 @@ func NewClient(cfg Config, opts ...Option) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{http: hc, cfg: cfg, logger: o.logger}, nil
+	return &Client{
+		http:           hc,
+		cfg:            cfg,
+		logger:         o.logger,
+		orderLimiter:   newRateLimiter(cfg.OrderRateLimit, cfg.OrderRateWindow),
+		duplicateCodes: cfg.DuplicateOrderCodes,
+	}, nil
 }
 
 // post performs an authenticated JSON request and decodes the body into out.

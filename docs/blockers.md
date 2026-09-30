@@ -1,6 +1,6 @@
 # Blockers and flagged decisions — feasibility
 
-Updated 30 September 2026, after Phase 3. Companion to the
+Updated 30 September 2026, after Phase 5. Companion to the
 [integration plan](vinculum-integration-plan.md) and the phase notes under
 [phases/](phases/).
 
@@ -105,6 +105,19 @@ a day's work, and a permanently weaker guarantee.
 | B14 | EasyEcom `getInventoryDetailsV2`, `Carriers/getTrackingDetails` | EasyEcom | Unverified | Nothing | Nothing — **unused under dropship** | Delete or rework in Phases 3, 6 |
 | B15 | Bulk Inventory Update's **path** | EasyEcom | `/bulkInventoryUpdate` | Phase 4 live | **Fails loud:** every push errors on the first call | One constant |
 | B16 | Bulk Inventory Update's per-SKU result shape | EasyEcom | Absent list = all accepted | Nothing | Partial failures reported as successes | One function |
+| B17 | Vinculum's `ship*` address field names | BCPL | Documented prefix, conventional names | **Phase 5 live** | **Fails quietly:** order accepted and shipped with a field missing | Nine struct tags |
+| B18 | The duplicate-order rejection's code and wording | BCPL | Keyword match, overridable by config | Nothing | Fails loudly; order stuck and visible, never duplicated | Configuration |
+
+**On B17 — read this one.** It is the only unverified item in the project
+that can be wrong **without anyone noticing**. Every other guess fails loudly:
+a wrong path errors on the first call, a wrong `responseCode` convention
+reports every call as an error, an unrecognised duplicate leaves an order
+stuck and visible. A wrong shipping-address field name means Vinculum accepts
+the order, ships it, and the parcel goes somewhere wrong or nowhere at all.
+
+It is the concrete reason not to run Phase 5 against BCPL production before
+B4 and B5 are settled. **One test order against their test environment
+settles it**, and that is the cheapest verification in the whole list.
 
 **On B15.** Added in Phase 3 and worth flagging clearly: the Postman
 collection records the bulk operation and its request body but **not its
@@ -203,6 +216,9 @@ more after Phase 2, which added a second concurrent subsystem.
 5. What `responseCode` does a successful call return, and what date format do
    `fromDate` / `toDate` expect? *(B10, B11)*
 6. Can Vinculum call a URL we host? *(B6 — a "no" costs us nothing)*
+7. **The exact field names of the `ship*` address block** on order create, and
+   the `responseCode` returned for a duplicate order number. *(B17, B18 — B17
+   is the one that fails silently)*
 
 **To EasyEcom** — answers unblock Phases 3 and 6:
 
@@ -226,7 +242,7 @@ No phase is waiting on any answer above to be **written**.
 |---|---|---|
 | 3 — SKU map, EasyEcom stock sink | **Done** | No (B3) |
 | 4 — `STOCK_SYNC` | **Done** | No (B1, B2, B15) |
-| 5 — Orders to Vinculum | Yes | No (B4, B5) — **and must not run against BCPL production** |
+| 5 — Orders to Vinculum | **Done** | No (B4, B5, B17) — **and must not run against BCPL production** |
 | 6 — `SHIPMENT_SYNC` | Yes | No (B7, B8) |
 | 7 — Reconciliation | Yes | Yes |
 
