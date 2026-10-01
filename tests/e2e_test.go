@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -27,11 +28,13 @@ import (
 	"github.com/gluzo/integration-gateway/app/httpclient"
 	"github.com/gluzo/integration-gateway/app/httpserver"
 	"github.com/gluzo/integration-gateway/app/idempotency"
-	"github.com/gluzo/integration-gateway/app/integrations/dabur"
 	"github.com/gluzo/integration-gateway/app/integrations/easyecom"
+	"github.com/gluzo/integration-gateway/app/integrations/vinculum"
 	"github.com/gluzo/integration-gateway/app/intlog"
 	"github.com/gluzo/integration-gateway/app/queue/redisqueue"
 	"github.com/gluzo/integration-gateway/app/routing"
+	"github.com/gluzo/integration-gateway/app/skumap"
+	"github.com/gluzo/integration-gateway/app/vendor"
 	"github.com/gluzo/integration-gateway/app/webhook"
 	"github.com/gluzo/integration-gateway/app/worker"
 	"github.com/gluzo/integration-gateway/app/workflow"
@@ -40,20 +43,22 @@ import (
 )
 
 const (
-	e2eOrderID       = "424242"
-	e2eReference     = "REF-E2E"
-	e2eWarehouse     = "777"
-	e2eFacility      = "DABUR-E2E"
-	e2eAdminToken    = "admin-e2e-token"
-	e2eEasyJWT       = "e2e-easyecom-jwt-token"
-	e2eEasyAPIKey    = "e2e-easyecom-api-key"
-	e2eUniwareUser   = "e2e-uniware-user"
-	e2eUniwarePass   = "e2e-uniware-password"
-	e2eUniwareToken  = "e2e-uniware-access-token"
-	e2eWebhookOrders = `[{"order_id":424242,"invoice_id":"INV-E2E","reference_code":"REF-E2E","warehouse_id":777,"order_status":"Pending","customer_name":"Asha Verma","contact_num":"9876501234","address_line_1":"12 MG Road","city":"Pune","state":"Maharashtra","pin_code":"411001","total_amount":"250.00","payment_mode":"COD","order_items":[{"suborder_id":1,"sku":"DAB-E2E","suborder_quantity":1,"selling_price":250}]}]`
+	e2eOrderID   = "424242"
+	e2eWarehouse = "777"
+	e2eLocation  = "BLR"
+	// The origin-side location the vendor's stock is written under. Separate
+	// from the vendor-side one because they name different ends of the route.
+	e2eOriginLocation = "bcpl-location-key"
+	e2eVendor         = "vinculum"
+	e2eVinculumOwner  = "e2e-vinculum-owner"
+	e2eVinculumKey    = "e2e-vinculum-key"
+	e2eAdminToken     = "admin-e2e-token"
+	e2eEasyJWT        = "e2e-easyecom-jwt-token"
+	e2eEasyAPIKey     = "e2e-easyecom-api-key"
+	e2eWebhookOrders  = `[{"order_id":424242,"invoice_id":"INV-E2E","reference_code":"REF-E2E","warehouse_id":777,"order_status":"Pending","customer_name":"Asha Verma","contact_num":"9876501234","address_line_1":"12 MG Road","city":"Pune","state":"Maharashtra","pin_code":"411001","total_amount":"250.00","payment_mode":"COD","order_items":[{"suborder_id":1,"sku":"BCPL-E2E","suborder_quantity":1,"selling_price":250}]}]`
 )
 
-// fakeEasyEcomAPI answers the calls the source adapter makes.
+// fakeEasyEcomAPI answers the calls the origin adapter makes.
 type fakeEasyEcomAPI struct {
 	srv        *httptest.Server
 	orderCalls atomic.Int32
@@ -80,92 +85,91 @@ func newFakeEasyEcomAPI(t *testing.T) *fakeEasyEcomAPI {
 		}
 		_, _ = w.Write([]byte(`{"code":200,"message":"Successful","data":` + e2eWebhookOrders + `}`))
 	})
-	mux.HandleFunc("/getInventoryDetailsV2", func(w http.ResponseWriter, r *http.Request) {
-		if !authed(w, r) {
-			return
-		}
-		_, _ = w.Write([]byte(`{"code":200,"message":"ok","data":[{"sku":"DAB-E2E","warehouse_id":777,"available_inventory":12}]}`))
-	})
-	mux.HandleFunc("/Carriers/getTrackingDetails", func(w http.ResponseWriter, r *http.Request) {
-		if !authed(w, r) {
-			return
-		}
-		_, _ = w.Write([]byte(`{"code":200,"message":"ok","data":[]}`))
-	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
 }
 
-// fakeUniwareAPI answers the calls the destination adapter makes, failing
-// sale order creation as many times as failCreates says.
-type fakeUniwareAPI struct {
-	srv         *httptest.Server
-	failCreates atomic.Int32
+// fakeVinculumAPI is a Vinculum eRetail server good enough to drive the real
+// adapter: it authenticates the two static headers, rejects an order number
+// it already holds, and can be made unavailable for a fixed number of
+// attempts.
+//
+// Phase 0 replaced the fake Uniware server with an in-process stub so that
+// phase could run at all, and promised to restore transport-level coverage
+// here. This is that: the scenario now exercises the real client, the real
+// mapper and the real duplicate handling, over HTTP.
+type fakeVinculumAPI struct {
+	t   *testing.T
+	srv *httptest.Server
+
 	createCalls atomic.Int32
-	created     atomic.Bool
-	facility    atomic.Value
+	failCreates atomic.Int32
+
+	mu sync.Mutex
+	// orders is the vendor's order book, keyed by the order number the
+	// gateway sent. A second submission of the same number is a duplicate.
+	orders map[string]map[string]any
 }
 
-func newFakeUniwareAPI(t *testing.T) *fakeUniwareAPI {
-	f := &fakeUniwareAPI{}
+func newFakeVinculumAPI(t *testing.T) *fakeVinculumAPI {
+	f := &fakeVinculumAPI{t: t, orders: map[string]map[string]any{}}
 	mux := http.NewServeMux()
-	mux.HandleFunc("/oauth/token", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if q.Get("grant_type") != "password" || q.Get("username") != e2eUniwareUser || q.Get("password") != e2eUniwarePass {
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
-			return
-		}
-		_, _ = w.Write([]byte(`{"access_token":"` + e2eUniwareToken + `","token_type":"bearer","refresh_token":"r","expires_in":3600,"scope":"read trust write"}`))
-	})
-	authed := func(w http.ResponseWriter, r *http.Request) bool {
-		if r.Header.Get("Authorization") != "bearer "+e2eUniwareToken {
-			w.WriteHeader(http.StatusUnauthorized)
-			return false
-		}
-		return true
-	}
-	mux.HandleFunc("/services/rest/v1/oms/saleOrder/create", func(w http.ResponseWriter, r *http.Request) {
-		if !authed(w, r) {
-			return
-		}
+	mux.HandleFunc("/RestWS/api/eretail/v4/order/create", func(w http.ResponseWriter, r *http.Request) {
 		f.createCalls.Add(1)
-		f.facility.Store(r.Header.Get("Facility"))
+		if r.Header.Get("ApiOwner") != e2eVinculumOwner || r.Header.Get("ApiKey") != e2eVinculumKey {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		if f.failCreates.Load() > 0 {
 			f.failCreates.Add(-1)
 			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`service unavailable`))
 			return
 		}
-		var body struct {
-			SaleOrder struct {
-				Code string `json:"code"`
-			} `json:"saleOrder"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		f.created.Store(true)
-		_, _ = w.Write([]byte(`{"successful":true,"errors":[],"warnings":[],"saleOrderDetailDTO":{"code":"` + body.SaleOrder.Code + `","status":"CREATED"}}`))
-	})
-	mux.HandleFunc("/services/rest/v1/oms/saleorder/get", func(w http.ResponseWriter, r *http.Request) {
-		if !authed(w, r) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if !f.created.Load() {
-			_, _ = w.Write([]byte(`{"successful":false,"errors":[{"code":1,"description":"not found"}]}`))
+		orderNo, _ := body["orderNo"].(string)
+
+		f.mu.Lock()
+		_, already := f.orders[orderNo]
+		if !already {
+			f.orders[orderNo] = body
+		}
+		f.mu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		if already {
+			// The rejection that makes submission idempotent.
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"responseCode":    101,
+				"responseMessage": "Duplicate order no " + orderNo + " already exists",
+			})
 			return
 		}
-		_, _ = w.Write([]byte(`{"successful":true,"saleOrderDTO":{"code":"` + e2eOrderID + `","status":"CREATED"}}`))
-	})
-	mux.HandleFunc("/services/rest/v1/inventory/adjust/bulk", func(w http.ResponseWriter, r *http.Request) {
-		if !authed(w, r) {
-			return
-		}
-		_, _ = w.Write([]byte(`{"successful":true,"inventoryAdjustmentResponses":[{"facilityInventoryAdjustment":{"itemSKU":"DAB-E2E"},"successful":true,"errors":[]}]}`))
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"responseCode": 0, "responseMessage": "SUCCESS", "orderNo": orderNo,
+		})
 	})
 	f.srv = httptest.NewServer(mux)
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+// order returns the document the vendor stored for an order number.
+func (f *fakeVinculumAPI) order(orderNo string) (map[string]any, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	doc, ok := f.orders[orderNo]
+	return doc, ok
+}
+
+func (f *fakeVinculumAPI) orderCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return len(f.orders)
 }
 
 // ensurePlatform creates the named platform or, when it already exists in a
@@ -208,10 +212,11 @@ func errString(err error) string {
 
 // TestEndToEndOrderSync exercises the definition-of-done scenario: an
 // EasyEcom webhook is authenticated, deduplicated and queued; the worker
-// routes, fetches, maps and pushes the order to Uniware; the destination
-// fails, the action retries and exhausts its budget; the process "restarts";
-// recovery resumes from the failed action and the run completes; the whole
-// trace is visible in the log viewer; and retention prunes old logs.
+// routes, fetches, maps and submits the order to the fulfilment vendor; the
+// vendor fails, the action retries and exhausts its budget; the process
+// "restarts"; recovery resumes from the failed action and the run completes;
+// the whole trace is visible in the log viewer; and retention prunes old
+// logs.
 func TestEndToEndOrderSync(t *testing.T) {
 	ctx := context.Background()
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
@@ -222,8 +227,8 @@ func TestEndToEndOrderSync(t *testing.T) {
 	// Provisioning, as an operator would do with gatewayctl.
 	creds := auth.NewStore(pool)
 	platformKey := ensurePlatform(t, creds, easyecom.PlatformName, auth.PlatformTypeSource)
-	ensurePlatform(t, creds, dabur.PlatformName, auth.PlatformTypeDestination)
-	integ, err := creds.CreateIntegration(ctx, "e2e-"+uuid.NewString()[:8], easyecom.PlatformName, dabur.PlatformName)
+	ensurePlatform(t, creds, e2eVendor, auth.PlatformTypeDestination)
+	integ, err := creds.CreateIntegration(ctx, "e2e-"+uuid.NewString()[:8], easyecom.PlatformName, e2eVendor)
 	if err != nil {
 		t.Fatalf("CreateIntegration: %v", err)
 	}
@@ -232,7 +237,7 @@ func TestEndToEndOrderSync(t *testing.T) {
 		t.Fatalf("IssueToken: %v", err)
 	}
 	routes := routing.NewStore(pool)
-	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, e2eWarehouse, e2eFacility); err != nil {
+	if _, err := routes.AddRoute(ctx, integ.Name, routing.TypeWarehouse, e2eWarehouse, e2eLocation, e2eOriginLocation); err != nil {
 		t.Fatalf("AddRoute: %v", err)
 	}
 
@@ -258,30 +263,59 @@ func TestEndToEndOrderSync(t *testing.T) {
 
 	// External platforms.
 	easyAPI := newFakeEasyEcomAPI(t)
-	uniAPI := newFakeUniwareAPI(t)
 	easyClient, err := easyecom.NewClient(easyecom.Config{BaseURL: easyAPI.srv.URL, APIKey: e2eEasyAPIKey, JWTToken: e2eEasyJWT},
 		easyecom.WithLogger(logger), easyecom.WithHTTPOptions(httpclient.WithSleep(noSleep)))
 	if err != nil {
 		t.Fatalf("easyecom.NewClient: %v", err)
 	}
-	daburClient, err := dabur.NewClient(dabur.Config{BaseURL: uniAPI.srv.URL, Username: e2eUniwareUser, Password: e2eUniwarePass, Channel: "GLUZO"},
-		dabur.WithLogger(logger), dabur.WithHTTPOptions(httpclient.WithSleep(noSleep), httpclient.WithRetryPolicy(httpclient.NoRetry())))
+	vinAPI := newFakeVinculumAPI(t)
+	vinClient, err := vinculum.NewClient(vinculum.Config{
+		BaseURL: vinAPI.srv.URL, APIOwner: e2eVinculumOwner, APIKey: e2eVinculumKey,
+		Location: e2eLocation, SellableBucket: "Good",
+	}, vinculum.WithLogger(logger), vinculum.WithHTTPOptions(
+		httpclient.WithSleep(noSleep),
+		// The transport's own retry is off here so that the outage is
+		// counted by the workflow's submit budget rather than absorbed
+		// below it. This scenario is about resume, not about the HTTP
+		// client's backoff, which has its own tests.
+		httpclient.WithRetryPolicy(httpclient.NoRetry()),
+	))
 	if err != nil {
-		t.Fatalf("dabur.NewClient: %v", err)
+		t.Fatalf("vinculum.NewClient: %v", err)
 	}
+	vnd, err := vinculum.NewVendor(vinClient, logger)
+	if err != nil {
+		t.Fatalf("vinculum.NewVendor: %v", err)
+	}
+	vendors := vendor.NewRegistry()
+	if err := vendors.Register(vnd); err != nil {
+		t.Fatalf("register vendor: %v", err)
+	}
+
+	// The order is placed under Gluzo's SKU and sent under the vendor's, so
+	// the pipeline needs a mapping for every SKU the order carries. A real
+	// store rather than the in-memory one: the SKU map is a table the
+	// workflow reads at run time, and the scenario is meant to exercise
+	// everything the deployment actually does.
+	mappings := skumap.NewStore(pool)
+	if _, err := mappings.Add(ctx, integ.Name, "BCPL-E2E", "VIN-E2E", 0); err != nil {
+		t.Fatalf("skumap.Add: %v", err)
+	}
+	skus := mappings
 
 	// Workflow with a small submit budget so the outage exhausts it quickly.
 	policies := ordersync.DefaultPolicies()
-	for _, p := range []*workflow.Policy{&policies.Resolve, &policies.Fetch, &policies.Submit, &policies.Inventory, &policies.Tracking} {
+	for _, p := range []*workflow.Policy{&policies.Resolve, &policies.Fetch, &policies.Map, &policies.Submit} {
 		p.BaseDelay, p.MaxDelay = time.Millisecond, time.Millisecond
 	}
 	policies.Submit.MaxAttempts = 2
 	orderSync, err := ordersync.New(ordersync.Dependencies{
-		Resolver:     routes,
-		Sources:      map[string]ordersync.Source{easyecom.PlatformName: easyecom.NewSource(easyClient, logger)},
-		Destinations: map[string]ordersync.Destination{dabur.PlatformName: dabur.NewDestination(daburClient, logger)},
-		Policies:     &policies,
-		Logger:       logger,
+		Resolver: routes,
+		Origins:  map[string]vendor.Origin{easyecom.PlatformName: easyecom.NewSource(easyClient, logger)},
+		Vendors:  vendors,
+		SKUs:     skus,
+		Policies: &policies,
+		Logger:   logger,
 	})
 	if err != nil {
 		t.Fatalf("ordersync.New: %v", err)
@@ -337,7 +371,7 @@ func TestEndToEndOrderSync(t *testing.T) {
 	}
 
 	// 1. EasyEcom sends ORDER_CREATED, twice (a redelivery).
-	uniAPI.failCreates.Store(2) // the destination is down for the first two attempts
+	vinAPI.failCreates.Store(2) // the vendor is down for the first two attempts
 	combined := map[string]string{auth.CombinedCredentialHeader: platformKey + ":" + accessToken}
 	first := post("/webhooks/easyecom", e2eWebhookOrders, combined)
 	if first.Code != http.StatusAccepted {
@@ -355,8 +389,8 @@ func TestEndToEndOrderSync(t *testing.T) {
 		t.Fatalf("duplicate webhook: %d %s", dup.Code, dup.Body.String())
 	}
 
-	// 2. The worker runs the workflow; the destination outage exhausts the
-	//    submit budget and the run is persisted as FAILED.
+	// 2. The worker runs the workflow; the vendor outage exhausts the submit
+	//    budget and the run is persisted as FAILED.
 	ctx1, cancel1 := context.WithCancel(ctx)
 	worker1 := newWorker()
 	done1 := make(chan error, 1)
@@ -386,24 +420,24 @@ func TestEndToEndOrderSync(t *testing.T) {
 	}
 
 	failed, _ := stateRepo.Get(ctx, corr)
-	if failed.NextAction != ordersync.ActionUpdateDestinationOrder || failed.LastSuccessfulAction != ordersync.ActionMapOrder {
+	if failed.NextAction != ordersync.ActionSubmitVendorOrder || failed.LastSuccessfulAction != ordersync.ActionMapOrder {
 		t.Fatalf("failed run position: next=%s last=%s", failed.NextAction, failed.LastSuccessfulAction)
 	}
 	if failed.Actions[3].Attempt != 2 || failed.LastError == nil || !failed.LastError.Retryable {
 		t.Fatalf("failed action record: %+v lastError=%+v", failed.Actions[3], failed.LastError)
 	}
-	if failed.Order == nil || failed.Order.ExternalID != e2eOrderID || failed.Route == nil || failed.Route.DestinationReference != e2eFacility {
+	if failed.Order == nil || failed.Order.ExternalID != e2eOrderID || failed.Route == nil || failed.Route.DestinationReference != e2eLocation {
 		t.Fatalf("state data: order=%+v route=%+v", failed.Order, failed.Route)
 	}
 	if rec, err := idem.Get(ctx, "easyecom:ORDER_CREATED:"+e2eOrderID); err != nil || rec.Status != idempotency.StatusFailed {
 		t.Fatalf("idempotency after failure: %+v %v", rec, err)
 	}
-	if uniAPI.createCalls.Load() != 2 || easyAPI.orderCalls.Load() != 1 {
-		t.Fatalf("calls before restart: create=%d fetch=%d", uniAPI.createCalls.Load(), easyAPI.orderCalls.Load())
+	if vinAPI.createCalls.Load() != 2 || easyAPI.orderCalls.Load() != 1 {
+		t.Fatalf("calls before restart: submit=%d fetch=%d", vinAPI.createCalls.Load(), easyAPI.orderCalls.Load())
 	}
 
 	// 3. The application restarts: startup recovery resumes the run from the
-	//    failed action; the destination is back.
+	//    failed action; the vendor is back.
 	worker2 := newWorker()
 	worker2.Recover(ctx, true)
 
@@ -417,14 +451,40 @@ func TestEndToEndOrderSync(t *testing.T) {
 	if completed.Actions[3].Status != workflow.ActionSucceeded || completed.Actions[3].Attempt != 1 {
 		t.Fatalf("submit record after resume: %+v", completed.Actions[3])
 	}
-	if completed.Result(workflow.ResultDestinationOrderID) != e2eOrderID || completed.Result(ordersync.ResultInventoryUpdated) != "1" {
+	if completed.Result(workflow.ResultDestinationOrderID) != e2eOrderID || completed.Result(ordersync.ResultVendorOrderCreated) != "true" {
 		t.Fatalf("results: %v", completed.Results)
 	}
-	if uniAPI.createCalls.Load() != 3 || easyAPI.orderCalls.Load() != 1 {
-		t.Fatalf("calls after restart: create=%d fetch=%d (resume must not replay FETCH_ORDER)", uniAPI.createCalls.Load(), easyAPI.orderCalls.Load())
+	if vinAPI.createCalls.Load() != 3 || easyAPI.orderCalls.Load() != 1 {
+		t.Fatalf("calls after restart: submit=%d fetch=%d (resume must not replay FETCH_ORDER)", vinAPI.createCalls.Load(), easyAPI.orderCalls.Load())
 	}
-	if got, _ := uniAPI.facility.Load().(string); got != e2eFacility {
-		t.Fatalf("Facility header = %q, want the route's destination reference", got)
+
+	// Three submission attempts, one order at the vendor. The resumed run
+	// did not duplicate, and it did not need the gateway to remember that:
+	// the order number is Gluzo's own, so a repeat is the vendor's to reject.
+	if got := vinAPI.orderCount(); got != 1 {
+		t.Fatalf("the vendor holds %d orders after 3 submissions, want 1", got)
+	}
+	doc, ok := vinAPI.order(e2eOrderID)
+	if !ok {
+		t.Fatalf("the vendor does not hold order %s", e2eOrderID)
+	}
+	if got, _ := doc["orderLocation"].(string); got != e2eLocation {
+		t.Fatalf("vendor location = %q, want the route's vendor reference", got)
+	}
+	// The vendor must be offered its own item code, not Gluzo's. Translated
+	// through the real sku_map table, so this also proves the workflow reads
+	// the store rather than passing the SKU through.
+	orderLines, _ := doc["orderAmount"].([]any)
+	if len(orderLines) != 1 {
+		t.Fatalf("vendor received %d lines, want 1", len(orderLines))
+	}
+	line, _ := orderLines[0].(map[string]any)
+	if got, _ := line["sku"].(string); got != "VIN-E2E" {
+		t.Fatalf("vendor was offered sku %q, want the mapped VIN-E2E", got)
+	}
+	// Line numbers are what Phase 6 will attribute a dispatch by.
+	if got, _ := line["lineno"].(float64); int(got) != 1 {
+		t.Fatalf("line number = %v, want 1", line["lineno"])
 	}
 	if rec, err := idem.Get(ctx, "easyecom:ORDER_CREATED:"+e2eOrderID); err != nil || rec.Status != idempotency.StatusCompleted {
 		t.Fatalf("idempotency after completion: %+v %v", rec, err)
@@ -460,9 +520,8 @@ func TestEndToEndOrderSync(t *testing.T) {
 	for _, want := range []string{
 		"WEBHOOK_RECEIVED:SUCCESS", "WEBHOOK_RECEIVED:DUPLICATE", "WORKFLOW_STARTED:STARTED",
 		"RESOLVE_INTEGRATION:SUCCESS", "FETCH_ORDER:SUCCESS", "MAP_ORDER:SUCCESS",
-		"UPDATE_DESTINATION_ORDER:FAILED UPDATE_DESTINATION_ORDER:FAILED WORKFLOW_FAILED:FAILED",
-		"WORKFLOW_RESUMED:STARTED UPDATE_DESTINATION_ORDER:SUCCESS",
-		"FETCH_INVENTORY:SUCCESS", "UPDATE_INVENTORY:SUCCESS", "FETCH_TRACKING:SUCCESS", "WORKFLOW_COMPLETED:SUCCESS",
+		"SUBMIT_VENDOR_ORDER:FAILED SUBMIT_VENDOR_ORDER:FAILED WORKFLOW_FAILED:FAILED",
+		"WORKFLOW_RESUMED:STARTED SUBMIT_VENDOR_ORDER:SUCCESS", "WORKFLOW_COMPLETED:SUCCESS",
 	} {
 		if !strings.Contains(trace, want) {
 			t.Errorf("trace lacks %q:\n%s", want, trace)
@@ -476,7 +535,7 @@ func TestEndToEndOrderSync(t *testing.T) {
 		t.Fatalf("search: %d %s", search.Code, search.Body.String())
 	}
 	page := get("/admin/logs/"+corr, adminHeaders)
-	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "COMPLETED") || !strings.Contains(page.Body.String(), "✗ UPDATE_DESTINATION_ORDER") {
+	if page.Code != http.StatusOK || !strings.Contains(page.Body.String(), "COMPLETED") || !strings.Contains(page.Body.String(), "✗ SUBMIT_VENDOR_ORDER") {
 		t.Fatalf("timeline page: %d", page.Code)
 	}
 
@@ -494,7 +553,7 @@ func TestEndToEndOrderSync(t *testing.T) {
 		if !json.Valid(scanner.Bytes()) {
 			t.Fatalf("invalid JSONL line: %s", scanner.Text())
 		}
-		for _, secret := range []string{platformKey, accessToken, e2eEasyJWT, e2eEasyAPIKey, e2eUniwarePass, e2eUniwareToken, e2eAdminToken} {
+		for _, secret := range []string{platformKey, accessToken, e2eEasyJWT, e2eEasyAPIKey, e2eAdminToken} {
 			if strings.Contains(scanner.Text(), secret) {
 				t.Fatalf("secret written to the integration log: %s", scanner.Text())
 			}

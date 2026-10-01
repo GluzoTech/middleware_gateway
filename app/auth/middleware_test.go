@@ -48,9 +48,9 @@ func newFixture() fixture {
 	store.AddPlatform(platform, goodKey)
 	store.AddPlatform(disabledPlatform, disabledKey)
 
-	integ := auth.Integration{ID: uuid.New(), Name: "easyecom-dabur", SourcePlatformID: platform.ID, Status: auth.StatusActive}
+	integ := auth.Integration{ID: uuid.New(), Name: "easyecom-vinculum", SourcePlatformID: platform.ID, Status: auth.StatusActive}
 	disabledInteg := auth.Integration{ID: uuid.New(), Name: "paused", SourcePlatformID: platform.ID, Status: auth.StatusDisabled}
-	foreignInteg := auth.Integration{ID: uuid.New(), Name: "shopify-dabur", SourcePlatformID: otherPlatform.ID, Status: auth.StatusActive}
+	foreignInteg := auth.Integration{ID: uuid.New(), Name: "shopify-vinculum", SourcePlatformID: otherPlatform.ID, Status: auth.StatusActive}
 
 	tokenID := uuid.New()
 	past := now.Add(-time.Minute)

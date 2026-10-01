@@ -1,0 +1,76 @@
+{
+  "_comment": "Constructed from the published shipmentDetail contract (v1/order/shipmentDetail), not captured from BCPL: no test credentials have been issued yet (open item 5). The records cover a shipped order, a delivered order whose dispatch block restates its own status, an accepted order that has not shipped, a shipped order identified only by Vinculum's own order_no, and a record carrying neither identifier.",
+  "responseCode": 0,
+  "responseMessage": "SUCCESS",
+  "hasMore": false,
+  "response": [
+    {
+      "extOrderNo": "9876543",
+      "order_no": "VIN-000121",
+      "status": "Shipped",
+      "shipDetail": {
+        "tracking_number": "AWB10000001",
+        "transporter": "Delhivery",
+        "tracking_url": "https://track.example.com/AWB10000001",
+        "shipdate": "2026-09-28 14:05:00",
+        "status": "Shipped",
+        "invoiceNo": "BCPL/2026/00891",
+        "sellerGstNo": "07AABCB1234C1ZQ",
+        "delivereddate": "",
+        "deliveryNumber": "DN-4471",
+        "ewbNo": "391000442213"
+      }
+    },
+    {
+      "extOrderNo": "9876544",
+      "order_no": "VIN-000122",
+      "status": "Shipped",
+      "shipDetail": {
+        "tracking_number": "AWB10000002",
+        "transporter": "Blue Dart",
+        "tracking_url": "https://track.example.com/AWB10000002",
+        "shipdate": "2026-09-26T09:12:30",
+        "status": "DELIVERED",
+        "invoiceNo": "BCPL/2026/00892",
+        "sellerGstNo": "07AABCB1234C1ZQ",
+        "delivereddate": "2026-09-28 11:40:00",
+        "deliveryNumber": "DN-4472",
+        "ewbNo": ""
+      }
+    },
+    {
+      "extOrderNo": "9876545",
+      "order_no": "VIN-000123",
+      "status": "Accepted",
+      "shipDetail": null
+    },
+    {
+      "extOrderNo": "",
+      "order_no": "VIN-000124",
+      "status": "In Transit",
+      "shipDetail": {
+        "tracking_number": "AWB10000004",
+        "transporter": "Ecom Express",
+        "tracking_url": "",
+        "shipdate": "2026-09-27",
+        "status": "",
+        "invoiceNo": "BCPL/2026/00894",
+        "sellerGstNo": "07AABCB1234C1ZQ",
+        "delivereddate": "",
+        "deliveryNumber": "",
+        "ewbNo": ""
+      }
+    },
+    {
+      "extOrderNo": "",
+      "order_no": "",
+      "status": "Shipped",
+      "shipDetail": {
+        "tracking_number": "AWB10000005",
+        "transporter": "Delhivery",
+        "shipdate": "2026-09-27 08:00:00",
+        "status": "Shipped"
+      }
+    }
+  ]
+}

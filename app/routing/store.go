@@ -32,9 +32,9 @@ func (s *Store) Resolve(ctx context.Context, integrationID uuid.UUID, key Key) (
 	}
 
 	var res Resolution
-	var destRef *string
+	var destRef, originRef *string
 	err := s.pool.QueryRow(ctx, `
-		SELECT r.id, r.integration_id, r.route_type, r.route_value, r.destination_reference, r.status, r.created_at,
+		SELECT r.id, r.integration_id, r.route_type, r.route_value, r.destination_reference, r.origin_reference, r.status, r.created_at,
 		       i.name, src.name, dst.name
 		FROM integration_routes r
 		JOIN integrations i ON i.id = r.integration_id
@@ -43,7 +43,7 @@ func (s *Store) Resolve(ctx context.Context, integrationID uuid.UUID, key Key) (
 		WHERE r.integration_id = $1 AND r.route_type = $2 AND r.route_value = $3
 		  AND r.status = 'active' AND i.status = 'active'`,
 		integrationID, key.Type, key.Value,
-	).Scan(&res.Route.ID, &res.Route.IntegrationID, &res.Route.Type, &res.Route.Value, &destRef, &res.Route.Status, &res.Route.CreatedAt,
+	).Scan(&res.Route.ID, &res.Route.IntegrationID, &res.Route.Type, &res.Route.Value, &destRef, &originRef, &res.Route.Status, &res.Route.CreatedAt,
 		&res.IntegrationName, &res.SourcePlatform, &res.DestinationPlatform)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNoRoute
@@ -54,27 +54,34 @@ func (s *Store) Resolve(ctx context.Context, integrationID uuid.UUID, key Key) (
 	if destRef != nil {
 		res.Route.DestinationReference = *destRef
 	}
+	if originRef != nil {
+		res.Route.OriginReference = *originRef
+	}
 	res.IntegrationID = res.Route.IntegrationID
 	return &res, nil
 }
 
 // AddRoute creates a route for the named integration.
-func (s *Store) AddRoute(ctx context.Context, integrationName, routeType, routeValue, destinationReference string) (Route, error) {
+func (s *Store) AddRoute(ctx context.Context, integrationName, routeType, routeValue, destinationReference, originReference string) (Route, error) {
 	routeType, routeValue = strings.TrimSpace(routeType), strings.TrimSpace(routeValue)
 	if routeType == "" || routeValue == "" {
 		return Route{}, fmt.Errorf("%w: route type and value are required", ErrInvalidArgument)
 	}
-	var destRef *string
-	if v := strings.TrimSpace(destinationReference); v != "" {
-		destRef = &v
-	}
+	destRef := optional(destinationReference)
+	originRef := optional(originReference)
 
-	r := Route{ID: uuid.New(), Type: routeType, Value: routeValue, DestinationReference: strings.TrimSpace(destinationReference)}
+	r := Route{
+		ID:                   uuid.New(),
+		Type:                 routeType,
+		Value:                routeValue,
+		DestinationReference: strings.TrimSpace(destinationReference),
+		OriginReference:      strings.TrimSpace(originReference),
+	}
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO integration_routes (id, integration_id, route_type, route_value, destination_reference)
-		SELECT $1, i.id, $2, $3, $4 FROM integrations i WHERE i.name = $5
+		INSERT INTO integration_routes (id, integration_id, route_type, route_value, destination_reference, origin_reference)
+		SELECT $1, i.id, $2, $3, $4, $5 FROM integrations i WHERE i.name = $6
 		RETURNING integration_id, status, created_at`,
-		r.ID, r.Type, r.Value, destRef, integrationName,
+		r.ID, r.Type, r.Value, destRef, originRef, integrationName,
 	).Scan(&r.IntegrationID, &r.Status, &r.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Route{}, fmt.Errorf("%w: integration %q", ErrNotFound, integrationName)
@@ -118,7 +125,7 @@ func (s *Store) RemoveRoute(ctx context.Context, id uuid.UUID) error {
 // ListRoutes returns the routes of the named integration.
 func (s *Store) ListRoutes(ctx context.Context, integrationName string) ([]Route, error) {
 	rows, err := s.pool.Query(ctx, `
-		SELECT r.id, r.integration_id, r.route_type, r.route_value, r.destination_reference, r.status, r.created_at
+		SELECT r.id, r.integration_id, r.route_type, r.route_value, r.destination_reference, r.origin_reference, r.status, r.created_at
 		FROM integration_routes r
 		JOIN integrations i ON i.id = r.integration_id
 		WHERE i.name = $1
@@ -131,12 +138,15 @@ func (s *Store) ListRoutes(ctx context.Context, integrationName string) ([]Route
 	var out []Route
 	for rows.Next() {
 		var r Route
-		var destRef *string
-		if err := rows.Scan(&r.ID, &r.IntegrationID, &r.Type, &r.Value, &destRef, &r.Status, &r.CreatedAt); err != nil {
+		var destRef, originRef *string
+		if err := rows.Scan(&r.ID, &r.IntegrationID, &r.Type, &r.Value, &destRef, &originRef, &r.Status, &r.CreatedAt); err != nil {
 			return nil, fmt.Errorf("routing: scan route: %w", err)
 		}
 		if destRef != nil {
 			r.DestinationReference = *destRef
+		}
+		if originRef != nil {
+			r.OriginReference = *originRef
 		}
 		out = append(out, r)
 	}
@@ -146,7 +156,57 @@ func (s *Store) ListRoutes(ctx context.Context, integrationName string) ([]Route
 	return out, nil
 }
 
+// optional renders a blank reference as NULL rather than an empty string, so
+// "not configured" and "configured as empty" stay distinguishable in the row.
+func optional(v string) *string {
+	if v = strings.TrimSpace(v); v == "" {
+		return nil
+	}
+	return &v
+}
+
 func isUniqueViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23505"
+}
+
+// ActiveLocations returns every distinct vendor location configured on an
+// active route of an active integration.
+//
+// DISTINCT is the point. Several warehouse routes commonly share one vendor
+// location — a vendor ships to more than one of the origin's warehouses from
+// the same shelf — and a sweep per route would read the same stock and push
+// it once per route.
+//
+// Routes with no vendor reference are excluded rather than swept with an
+// empty location: asking a vendor for "the stock at ”" is not a question.
+func (s *Store) ActiveLocations(ctx context.Context) ([]Location, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT DISTINCT i.id, i.name, src.name, dst.name,
+		       r.destination_reference, COALESCE(r.origin_reference, '')
+		FROM integration_routes r
+		JOIN integrations i ON i.id = r.integration_id
+		JOIN platforms src ON src.id = i.source_platform_id
+		JOIN platforms dst ON dst.id = i.destination_platform_id
+		WHERE r.status = 'active' AND i.status = 'active'
+		  AND r.destination_reference IS NOT NULL AND r.destination_reference <> ''
+		ORDER BY i.name, r.destination_reference`)
+	if err != nil {
+		return nil, fmt.Errorf("routing: list active locations: %w", err)
+	}
+	defer rows.Close()
+
+	var out []Location
+	for rows.Next() {
+		var loc Location
+		if err := rows.Scan(&loc.IntegrationID, &loc.IntegrationName, &loc.OriginPlatform,
+			&loc.VendorPlatform, &loc.VendorReference, &loc.OriginReference); err != nil {
+			return nil, fmt.Errorf("routing: scan location: %w", err)
+		}
+		out = append(out, loc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("routing: list active locations: %w", err)
+	}
+	return out, nil
 }

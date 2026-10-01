@@ -65,6 +65,10 @@ type RouteInfo struct {
 	RouteType            string `json:"route_type"`
 	RouteValue           string `json:"route_value"`
 	DestinationReference string `json:"destination_reference,omitempty"`
+	// OriginReference is the origin-side location for this route, e.g. the
+	// EasyEcom location_key a stock push authenticates for. Empty means the
+	// process default.
+	OriginReference string `json:"origin_reference,omitempty"`
 }
 
 // Well-known result keys.

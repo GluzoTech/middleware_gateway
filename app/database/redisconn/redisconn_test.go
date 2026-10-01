@@ -11,7 +11,10 @@ import (
 )
 
 func TestConnectRejectsMalformedURLWithoutLeakingPassword(t *testing.T) {
-	_, err := redisconn.Connect(context.Background(), "redis://:hunter2@localhost:notaport/0", time.Second)
+	_, err := redisconn.Connect(context.Background(), redisconn.Config{
+		URL:            "redis://:hunter2@localhost:notaport/0",
+		ConnectTimeout: time.Second,
+	})
 	if err == nil {
 		t.Fatal("expected error for malformed URL")
 	}
@@ -25,7 +28,10 @@ func TestConnectFailsFastWhenUnreachable(t *testing.T) {
 	defer cancel()
 
 	// Port 9 (discard) is reserved and never runs Redis.
-	_, err := redisconn.Connect(ctx, "redis://127.0.0.1:9/0", 500*time.Millisecond)
+	_, err := redisconn.Connect(ctx, redisconn.Config{
+		URL:            "redis://127.0.0.1:9/0",
+		ConnectTimeout: 500 * time.Millisecond,
+	})
 	if err == nil {
 		t.Fatal("expected connection error")
 	}
@@ -41,7 +47,11 @@ func TestConnectIntegration(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	client, err := redisconn.Connect(ctx, url, 5*time.Second)
+	client, err := redisconn.Connect(ctx, redisconn.Config{
+		URL:            url,
+		Password:       os.Getenv("TEST_REDIS_PASSWORD"),
+		ConnectTimeout: 5 * time.Second,
+	})
 	if err != nil {
 		t.Fatalf("Connect: %v", err)
 	}
@@ -49,5 +59,26 @@ func TestConnectIntegration(t *testing.T) {
 
 	if err := (redisconn.Checker{Client: client}).Check(ctx); err != nil {
 		t.Fatalf("Check: %v", err)
+	}
+}
+
+// A ping failure must name the endpoint, so that a bare deadline error is
+// traceable, and must still not carry the password.
+func TestConnectPingErrorNamesAddressNotPassword(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := redisconn.Connect(ctx, redisconn.Config{
+		URL:            "redis://:hunter2@127.0.0.1:9/0",
+		ConnectTimeout: 500 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected connection error")
+	}
+	if !strings.Contains(err.Error(), "127.0.0.1:9") {
+		t.Errorf("error should name the endpoint: %v", err)
+	}
+	if strings.Contains(err.Error(), "hunter2") {
+		t.Errorf("password leaked into error: %v", err)
 	}
 }

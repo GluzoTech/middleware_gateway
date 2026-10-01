@@ -50,13 +50,23 @@ func (k Key) String() string { return k.Type + "=" + k.Value }
 
 // Route is one configured mapping.
 type Route struct {
-	ID                   uuid.UUID
-	IntegrationID        uuid.UUID
-	Type                 string
-	Value                string
+	ID            uuid.UUID
+	IntegrationID uuid.UUID
+	Type          string
+	Value         string
+	// DestinationReference is the vendor-side location for this route, e.g.
+	// Vinculum's three-character orderLocation.
 	DestinationReference string
-	Status               string
-	CreatedAt            time.Time
+	// OriginReference is the origin-side location: for EasyEcom the
+	// location_key whose JWT is scoped to that location. Empty means the
+	// process default.
+	//
+	// The two are separate because they are different systems' names for
+	// different ends of the same pipeline, and conflating them would make a
+	// stock push authenticate for whichever one happened to be set.
+	OriginReference string
+	Status          string
+	CreatedAt       time.Time
 }
 
 // Resolution is the outcome of routing an event.
@@ -66,6 +76,26 @@ type Resolution struct {
 	IntegrationName     string
 	SourcePlatform      string
 	DestinationPlatform string
+}
+
+// Location is a distinct vendor location configured for an integration, with
+// the origin location its stock is written to.
+//
+// A scheduled sweep works per location, not per route. Several warehouse
+// routes can point at the same vendor location, and sweeping once per route
+// would read the same stock and push it several times — spending the origin
+// platform's rate limit to reach the same answer.
+type Location struct {
+	IntegrationID   uuid.UUID
+	IntegrationName string
+	OriginPlatform  string
+	VendorPlatform  string
+	// VendorReference is the vendor-side location, e.g. Vinculum's
+	// orderLocation. A location with none cannot be swept: there is nothing
+	// to ask the vendor about.
+	VendorReference string
+	// OriginReference is the origin-side location the stock is written to.
+	OriginReference string
 }
 
 // Resolver finds the integration for an event.

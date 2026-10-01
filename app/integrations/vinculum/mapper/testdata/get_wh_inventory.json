@@ -1,0 +1,50 @@
+{
+  "_comment": "Constructed from the published getWhInventory contract (v4/stock/getWhInventory), not captured from BCPL: no test credentials have been issued yet (open item 5). Every field name comes from the specification; the values exercise the variance the Flex types exist for - quantities as numbers and as quoted strings, a non-sellable bucket, a row with no SKU, and a row whose committed quantity exceeds what is held.",
+  "responseCode": 0,
+  "responseMessage": "SUCCESS",
+  "hasMore": false,
+  "response": [
+    {
+      "skuCode": "BCPL-CHY-500",
+      "location": "DEL",
+      "qty": 120,
+      "committedQty": 20,
+      "bucket": "Good"
+    },
+    {
+      "skuCode": "BCPL-HNY-250",
+      "location": "DEL",
+      "qty": "80",
+      "committedQty": "0",
+      "bucket": "Good"
+    },
+    {
+      "skuCode": "BCPL-AML-200",
+      "location": "DEL",
+      "qty": 15,
+      "committedQty": 15,
+      "bucket": "Good"
+    },
+    {
+      "skuCode": "BCPL-DMG-001",
+      "location": "DEL",
+      "qty": 9,
+      "committedQty": 0,
+      "bucket": "Damaged"
+    },
+    {
+      "skuCode": "BCPL-OVR-010",
+      "location": "DEL",
+      "qty": 5,
+      "committedQty": 8,
+      "bucket": "Good"
+    },
+    {
+      "skuCode": "   ",
+      "location": "DEL",
+      "qty": 3,
+      "committedQty": 0,
+      "bucket": "Good"
+    }
+  ]
+}

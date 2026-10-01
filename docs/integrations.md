@@ -105,92 +105,212 @@ of both credentials (see ADR-009 in [architecture.md](architecture.md)).
 - Line total is `selling_price * suborder_quantity`.
 - Currency is assumed to be INR; the payload does not carry it.
 
-### Source adapter
+### Stock sink
 
-`easyecom.Source` implements the workflow's `Source` contract. `FetchOrder`
-prefers the Get Order Details API and falls back to the webhook payload
-(which carries the same order representation) when the API cannot identify
-the order; transient API failures propagate so the engine retries them.
-`FetchInventory` queries each distinct SKU once. `FetchTracking` treats a
-permanent not-found as "no shipment yet".
+`easyecom.Sink` implements `vendor.StockSink`. It is a separate type from
+`Source` deliberately: `Source` reads the customer-facing order, `Sink` writes
+vendor-owned facts inward. One type carrying both would be a type whose method
+names disagree about which way data moves.
 
-## Dabur (Uniware)
+| Operation | Method and path | Contract status |
+| --- | --- | --- |
+| `BulkInventoryUpdate` | `POST /bulkInventoryUpdate` | **Path unverified.** The Postman collection records the operation and its body, `{"skus":[{"sku","quantity"}]}`, but not its path. |
 
-Dabur runs Unicommerce Uniware. The adapter follows Unicommerce's public
-documentation exactly; what is tenant-specific is configuration.
+Rules the sink holds to:
+
+- **Quantities are absolute.** They replace what EasyEcom holds. Nothing
+  reconciles them against EasyEcom's own view: the vendor is the source of
+  truth for these SKUs, and an origin applying its own arithmetic on top
+  produces drift nobody can trace.
+- **Values are clamped at 10,000 before sending.** EasyEcom clamps silently
+  and reports the clamped figure; capping here means the number sent is the
+  number stored, so the response can be read at face value.
+- **Large sets are split into batches of 500.** The documented limit is not
+  published (EasyEcom open item 9); the batch size is one constant.
+- **A level that cannot be sent is counted as a failure, not dropped.** A SKU
+  whose stock never reaches the storefront looks exactly like a SKU whose
+  stock did not change.
+
+### The location boundary
+
+`Route.OriginReference` selects the EasyEcom location a push authenticates
+for, and the token cache is keyed by location.
+
+This is the load-bearing part. EasyEcom issues a JWT scoped to one location,
+so a push for BCPL **cannot** write Gluzo's own quantities even if the SKU set
+were wrong — the platform rejects it. The guarantee comes from the platform
+rather than from the gateway being careful, which is the only kind of
+guarantee a code defect cannot undo.
+
+A route with no origin reference falls back to the process default and logs a
+warning, because a stock push landing in the default location is precisely the
+failure this design exists to prevent.
+
+### Origin adapter
+
+`easyecom.Source` implements `vendor.Origin`. `FetchOrder` prefers the Get
+Order Details API and falls back to the webhook payload (which carries the
+same order representation) when the API cannot identify the order; transient
+API failures propagate so the engine retries them.
+
+It still carries `FetchInventory` and `FetchTracking` from the removed
+source/destination contracts. Neither is called by any workflow now: under dropship
+the vendor owns stock and dispatch, so both flow *into* EasyEcom through the
+`StockSink` and `ShipmentSink` roles instead. Phases 3 and 6 of the
+[Vinculum plan](vinculum-integration-plan.md) decide whether they are
+reworked into the sink adapter or deleted.
+
+## Vendor side
+
+No adapter implements the vendor roles yet. The previous Uniware pipeline was
+removed in Phase 0 of the [Vinculum plan](vinculum-integration-plan.md);
+Vinculum eRetail's client and read paths arrived in Phase 1. See
+[phases/](phases/).
+
+### Roles, not a source/destination pair
+
+`app/vendor` defines six role interfaces. The direction of data is fixed by
+the role, so an adapter cannot carry a method name that lies about which way
+data moves.
+
+| Side | Role | Methods | Meaning |
+| --- | --- | --- | --- |
+| Vendor | `OrderReceiver` | `PrepareOrder`, `SubmitOrder` | accepts orders for fulfilment |
+| Vendor | `StockProvider` | `FetchStock` | owns stock for its SKUs; the gateway reads |
+| Vendor | `FulfilmentProvider` | `FetchShipments` | ships, so owns AWB, invoice, delivery status |
+| Origin | `Origin` | `FetchOrder` | customer-facing order record |
+| Origin | `StockSink` | `PushStock` | receives vendor stock as authoritative |
+| Origin | `ShipmentSink` | `PushShipment` | receives externally-booked dispatch |
+
+`vendor.Registry` indexes adapters by platform name and discovers capability
+by type assertion at registration, so adding a partner is one `Register`
+call and a partner may implement any subset of the roles. An adapter
+implementing none of them is rejected at start-up.
+
+### Contract rules every adapter must honour
+
+- `PrepareOrder` is pure. No network, no database. Its failures are
+  permanent and are never retried.
+- `SubmitOrder` is idempotent. Resume, redelivery and retry all call it more
+  than once for the same order; an order that already exists is reported
+  with `Created=false`, not raised as an error.
+- `PushStock` treats the quantity as authoritative and replaces what the
+  origin holds. It never adds, subtracts or reconciles against the origin's
+  own view.
+- `PushShipment` never moves a status backwards. A "delivered" notice can
+  arrive before the "shipped" one; a late arrival may correct the tracking
+  number but leaves a more advanced status alone.
+- No part of the gateway writes vendor stock back to the vendor.
+
+### Route references
+
+A route carries two location references and the distinction matters:
+
+| Field | Side | For Vinculum / EasyEcom |
+| --- | --- | --- |
+| `VendorReference` | vendor | the three-character `orderLocation` |
+| `OriginReference` | origin | the `location_key` scoping stock writes |
+
+Both are configuration; neither appears in code. `OriginReference` has no
+routing column yet — Phase 3 adds it.
+
+## Vinculum (eRetail)
+
+BCPL runs Vinculum eRetail. The adapter follows the live specification read on
+29 September 2026; what is tenant-specific is configuration. Phase 1 built the
+client, the two read endpoints and their mappers. The vendor roles themselves
+are Phases 4 and 5.
 
 ### Authentication
 
-OAuth 2.0 password grant, as documented:
+Two static headers on every call:
 
-```text
-GET {DABUR_BASE_URL}/oauth/token?grant_type=password&client_id=my-trusted-client&username=…&password=…
-GET {DABUR_BASE_URL}/oauth/token?grant_type=refresh_token&client_id=my-trusted-client&refresh_token=…
-```
+| Header | Value |
+| --- | --- |
+| `ApiOwner` | `VINCULUM_API_OWNER` |
+| `ApiKey` | `VINCULUM_API_KEY` |
 
-The access token is cached until one minute before `expires_in`, renewed
-with the refresh token, and re-obtained with the password grant when the
-refresh fails. A 401 from any endpoint invalidates the cache and the call is
-repeated once. Because Uniware puts credentials in the query string, the
-HTTP client strips query strings from every transport error it reports.
+No token exchange, no refresh, no expiry. The client therefore has no token
+source and no retry-on-401 loop: the credentials are static, so a 401 means
+they are wrong and asking again would only be told the same thing.
 
 ### Endpoints
 
-| Operation | Method and path | Headers |
+| Operation | Method and path | Contract status |
 | --- | --- | --- |
-| `CreateSaleOrder` | `POST /services/rest/v1/oms/saleOrder/create` | `Authorization: bearer`, `Facility: <code>` |
-| `GetSaleOrder` | `POST /services/rest/v1/oms/saleorder/get` | `Authorization: bearer` |
-| `AdjustInventoryBulk` | `POST /services/rest/v1/inventory/adjust/bulk` | `Authorization: bearer`, `Facility: <code>` |
+| `GetWhInventory` | `POST /RestWS/api/eretail/v4/stock/getWhInventory` | Field names per the published specification |
+| `ShipmentDetail` | `POST /RestWS/api/eretail/v1/order/shipmentDetail` | Field names per the published specification |
+| `CreateOrder` | `POST /RestWS/api/eretail/v4/order/create` | Header and line field names per the specification; **the `ship*` address field names are not enumerated there and are unverified** |
 
-Uniware reports failure in the body (`successful: false` with `errors[]`)
-even on HTTP 200; the client converts that into a non-retryable external
-error carrying the first error code and description.
+### Dispatch, and why it never moves backwards
 
-### Facility selection
+`shipmentDetail` is read on a schedule, so records arrive out of order as a
+matter of course: a sweep can read "delivered" before it has ever read
+"shipped". `tracking.Status.Progress()` orders the statuses once, and
+`app/shipmentstate` records the furthest state pushed per package, so:
 
-The `Facility` header (and each item's `facilityCode`) comes from the
-route's `destination_reference`, falling back to `DABUR_DEFAULT_FACILITY`.
-Mapping "EasyEcom warehouse 12345 ships from Uniware facility DABUR-DEL" is
-therefore a route row, never code.
+- a status that advances is pushed;
+- a status that does not is ignored, unless the waybill or carrier changed,
+  in which case the details are pushed and the status is left alone;
+- an identical record is a no-op, which is what makes a sweep safe to repeat.
 
-### Order mapping
+Returned and cancelled rank above delivered deliberately. An RTO reported
+after a delivery notice is the vendor correcting itself, and the vendor owns
+dispatch.
 
-| Uniware field | Source |
+Both page. `hasMore` drives the stock sweep, `pageNumber` the shipment sweep,
+and each `FetchAll*` helper stops at a page ceiling rather than trusting a
+`hasMore` that never goes false. A stock sweep that ends early is reported as
+an error, not returned short: half a catalogue, taken as the whole, would
+zero out the other half at the storefront.
+
+### Response handling
+
+Vinculum wraps responses in `responseCode`/`responseMessage`. A business
+rejection arrives as HTTP 200 with a non-zero `responseCode`, so the envelope
+is checked separately from the status; a caller that checked only the status
+would read a rejection as a successful empty page. Envelope errors are
+**non-retryable** — they describe a decision about the request. Transient
+conditions arrive as 5xx and are retried by the HTTP client.
+
+Numbers arrive as JSON numbers in some fields and as quoted strings in
+others, so the `dto.Flex*` types accept both.
+
+### Unverified, and why
+
+| Item | Status |
 | --- | --- |
-| `saleOrder.code` | domain `ExternalID` (EasyEcom `order_id`); makes creation idempotent |
-| `displayOrderCode` | `ReferenceCode`, falling back to the code |
-| `displayOrderDateTime` | `OrderedAt` as epoch milliseconds |
-| `cashOnDelivery`, `paymentInstrument` | `PaymentMode` (COD sends `CASH`) |
-| `totalPrepaidAmount` | `TotalAmount` for prepaid orders |
-| `totalShippingCharges`, `totalDiscount` | order-level charges |
-| `addresses[0]` (id `1`) | shipping address, with customer name/phone/email as fallback |
-| `saleOrderItems` | one item **per unit**: quantity 3 becomes codes `<line>-1`, `<line>-2`, `<line>-3` |
-| `channel`, `verificationRequired` | `DABUR_CHANNEL`, `DABUR_VERIFICATION_REQUIRED` |
+| `responseCode` success value | `0` assumed. The specification names the field without enumerating values. Failing safe: a wrong assumption reports every call as an error rather than swallowing failures. |
+| Request date format | `2006-01-02 15:04:05`. The specification documents the date parameters without their format. One constant, `dto.RequestTimeLayout`. |
+| Response date formats | Several layouts are tried in turn, because the format of a given field is not stated and refusing a shipment over a date format loses tracking the customer is waiting for. |
+| Dispatch status values | Normalised by keyword. An unrecognised label becomes `UNKNOWN` and keeps its original text in `SourceStatus`, so nothing is silently reclassified. |
+| `reqType`, `filterBy`, `fulfillmentLocation`, `status[]` | Documented parameters with no published value set. Passed through when set, omitted when not, so a value BCPL supply later needs no code change. |
+| Sellable `bucket` value | BCPL open item 2. Blank accepts every bucket, which is right for reading and wrong for pushing. Phase 4 requires it. |
+| `qty` versus `committedQty` | Assumption A1. See below. |
+| The `ship*` address field names | Not enumerated in the specification. The nine fields follow the documented prefix. **This is the one unverified item here that fails quietly** — Vinculum would accept an order and ship it with a field missing. |
+| The duplicate-order rejection | The specification states that a duplicate is rejected but gives neither code nor wording. Matched by keyword, overridable with `VINCULUM_DUPLICATE_ORDER_CODES`. Failing to recognise one is safe: the run fails visibly and the vendor did the rejecting, so nothing is duplicated. |
+| `orderType`, `paymentType` values | Named as header fields without an enumerated set. One constant each. |
 
-Uniware marks `name`, `addressLine1`, `city`, `state` and `phone` as
-required; an order missing any of them fails `MAP_ORDER` with a mapping
-error naming the field.
+Test payloads under `app/integrations/vinculum/mapper/testdata/` are built
+from the specification, not captured from BCPL: no test credentials have been
+issued (open item 5).
 
-### Idempotent submission
+### The sellable quantity, and why it is one expression
 
-If Uniware reports that the code already exists, the adapter looks the order
-up and reports it as existing rather than failing, so a resumed or
-redelivered run never creates a duplicate.
+`mapper.SellableQuantity` is assumption A1 of the plan: sellable is `qty`
+minus `committedQty`. BCPL have indicated `committedQty` may itself be the net
+figure, in which case the function becomes `return committed`.
 
-### Inventory
+It is deliberately one expression called from one place. Getting it wrong is
+expensive in production — systematic oversell if too high, a catalogue reading
+as out of stock if too low — so it must be observed rather than assumed. The
+observation: read both values for a SKU, place one order for one unit, read
+again. If `committedQty` rises, A1 holds.
 
-Stock levels become `REPLACE` adjustments of `GOOD_INVENTORY` on
-`DABUR_SHELF_CODE` (default `DEFAULT`). The per-adjustment outcomes are
-counted and partial failures are logged.
+### Confirm with BCPL before go-live
 
-### Confirm with Dabur before go-live
-
-- Tenant host (`DABUR_BASE_URL`), API user credentials, channel code and
-  facility codes.
-- Whether `saleOrder.code` should be the EasyEcom order id or the marketplace
-  reference.
-- The `displayOrderDateTime` format their tenant expects.
-- `verificationRequired` policy for gateway-created orders.
-- The exact error Uniware returns for a duplicate sale order code.
-- Inventory semantics (`REPLACE` absolute quantities versus `ADD`/`REMOVE`
-  deltas) and the receiving shelf.
+- Which `bucket` value is sellable stock.
+- Whether `committedQty` rises or falls when an order is placed (A1).
+- The `orderLocation` code for BCPL's warehouse.
+- The date format their tenant expects, and the `responseCode` success value.
+- Test-environment `ApiOwner`/`ApiKey` and seeded SKUs.

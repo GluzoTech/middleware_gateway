@@ -25,7 +25,7 @@ func sampleState(id string) *workflow.State {
 	}, "job-1", time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC))
 	st.Order = &order.Order{ExternalID: "1001", Items: []order.Item{{SKU: "A", Quantity: 1}}}
 	st.SetResult("destination_order_id", "SO-1")
-	st.SetPayload("dabur_request", []byte(`{"saleOrder":{"code":"1001"}}`))
+	st.SetPayload("vendor_request", []byte(`{"saleOrder":{"code":"1001"}}`))
 	return st
 }
 
@@ -49,8 +49,8 @@ func TestFileRepositoryRoundTrip(t *testing.T) {
 		t.Fatalf("round trip lost data: %+v", got)
 	}
 	var compact bytes.Buffer
-	if err := json.Compact(&compact, got.Payload("dabur_request")); err != nil || compact.String() != `{"saleOrder":{"code":"1001"}}` {
-		t.Fatalf("payload lost: %s (%v)", got.Payload("dabur_request"), err)
+	if err := json.Compact(&compact, got.Payload("vendor_request")); err != nil || compact.String() != `{"saleOrder":{"code":"1001"}}` {
+		t.Fatalf("payload lost: %s (%v)", got.Payload("vendor_request"), err)
 	}
 	var eventPayload bytes.Buffer
 	if err := json.Compact(&eventPayload, got.Event.Payload); err != nil || got.Event.ExternalOrderID != "1001" || eventPayload.String() != `{"order_id":1001}` {

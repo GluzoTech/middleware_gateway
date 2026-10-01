@@ -27,9 +27,9 @@
       "order_items": [
         {
           "suborder_id": 555001,
-          "sku": "DAB-CHY-500",
+          "sku": "BCP-CHY-500",
           "product_id": 777,
-          "product_name": "Dabur Chyawanprash 500g",
+          "product_name": "Herbal Chyawanprash 500g",
           "suborder_quantity": "2",
           "tax_rate": "18",
           "tax_type": "GST",
@@ -38,9 +38,9 @@
         },
         {
           "suborder_id": 555002,
-          "sku": "DAB-HNY-250",
+          "sku": "BCP-HNY-250",
           "product_id": 778,
-          "product_name": "Dabur Honey 250g",
+          "product_name": "Forest Honey 250g",
           "suborder_quantity": 1,
           "tax_rate": 5,
           "tax_type": "GST",

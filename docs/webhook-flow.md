@@ -41,7 +41,7 @@ Publish Job to Redis Streams ──▶ failure: claim released, 503
 202 accepted  (200 when every event was a duplicate or the payload was empty)
 ```
 
-The handler never calls EasyEcom or Dabur. Its only I/O is one insert into
+The handler never calls EasyEcom or a vendor. Its only I/O is one insert into
 `idempotency_records` and one `XADD` per event, so it answers in
 milliseconds regardless of downstream health.
 

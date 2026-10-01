@@ -27,9 +27,9 @@ func seedLogs(t *testing.T) string {
 	d1 := time.Date(2026, 9, 10, 9, 0, 0, 0, time.UTC)
 	d2 := time.Date(2026, 9, 12, 9, 0, 0, 0, time.UTC)
 	write(d1, intlog.Entry{CorrelationID: "INT-A", Platform: "easyecom", ExternalOrderID: "100", Action: "WEBHOOK_RECEIVED", Status: intlog.StatusSuccess})
-	write(d1.Add(time.Minute), intlog.Entry{CorrelationID: "INT-A", Workflow: "ORDER_SYNC", Integration: "dabur", ExternalOrderID: "100", Action: "FETCH_ORDER", Status: intlog.StatusSuccess, Attempt: 1})
-	write(d2, intlog.Entry{CorrelationID: "INT-A", Workflow: "ORDER_SYNC", Integration: "dabur", ExternalOrderID: "100", OrderID: "SO-100", Action: "UPDATE_DESTINATION_ORDER", Status: intlog.StatusFailed, Attempt: 1, Error: &apperror.Info{Category: apperror.ExternalAPI, Message: "503"}})
-	write(d2.Add(time.Minute), intlog.Entry{CorrelationID: "INT-A", Workflow: "ORDER_SYNC", Integration: "dabur", ExternalOrderID: "100", OrderID: "SO-100", Action: "UPDATE_DESTINATION_ORDER", Status: intlog.StatusSuccess, Attempt: 2})
+	write(d1.Add(time.Minute), intlog.Entry{CorrelationID: "INT-A", Workflow: "ORDER_SYNC", Integration: "vinculum", ExternalOrderID: "100", Action: "FETCH_ORDER", Status: intlog.StatusSuccess, Attempt: 1})
+	write(d2, intlog.Entry{CorrelationID: "INT-A", Workflow: "ORDER_SYNC", Integration: "vinculum", ExternalOrderID: "100", OrderID: "SO-100", Action: "UPDATE_DESTINATION_ORDER", Status: intlog.StatusFailed, Attempt: 1, Error: &apperror.Info{Category: apperror.ExternalAPI, Message: "503"}})
+	write(d2.Add(time.Minute), intlog.Entry{CorrelationID: "INT-A", Workflow: "ORDER_SYNC", Integration: "vinculum", ExternalOrderID: "100", OrderID: "SO-100", Action: "UPDATE_DESTINATION_ORDER", Status: intlog.StatusSuccess, Attempt: 2})
 	write(d2.Add(2*time.Minute), intlog.Entry{CorrelationID: "INT-B", Platform: "easyecom", ExternalOrderID: "200", Action: "WEBHOOK_RECEIVED", Status: intlog.StatusSuccess})
 	// A corrupt line must not break searches.
 	_ = os.WriteFile(filepath.Join(root, "2026-09-11", "integration.jsonl"), []byte("not json\n"), 0o640)

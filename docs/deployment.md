@@ -24,10 +24,12 @@ secret manager. Never commit `.env`.
 | `HTTP_WRITE_TIMEOUT` | `30s` | Response write deadline |
 | `HTTP_IDLE_TIMEOUT` | `60s` | Keep-alive idle deadline |
 | `HTTP_MAX_BODY_BYTES` | `1048576` | Cap on inbound request bodies |
+| `ENV_FILE` | `.env` | Env file read at start-up, if present; never overrides a variable the environment already sets |
 | `DATABASE_URL` | required | PostgreSQL connection URL |
 | `DATABASE_MAX_CONNS` | `10` | Pool size |
 | `DATABASE_CONNECT_TIMEOUT` | `5s` | Connect and startup ping deadline |
 | `REDIS_URL` | required | `redis://` or `rediss://` URL |
+| `REDIS_PASSWORD` | _(none)_ | Overrides any password in `REDIS_URL`; avoids percent-encoding it |
 | `REDIS_CONNECT_TIMEOUT` | `5s` | Dial and startup ping deadline |
 | `QUEUE_STREAM` | `gluzo:jobs` | Redis stream holding queued jobs |
 | `QUEUE_GROUP` | `gateway-workers` | Consumer group name |
@@ -41,14 +43,24 @@ secret manager. Never commit `.env`.
 | `EASYECOM_JWT_TOKEN` | | Pre-issued JWT (alternative to login) |
 | `EASYECOM_EMAIL`, `EASYECOM_PASSWORD`, `EASYECOM_LOCATION_KEY` | | Login credentials used to obtain a JWT |
 | `EASYECOM_TIMEOUT` | `15s` | Per-attempt timeout for EasyEcom calls |
-| `DABUR_BASE_URL` | | Uniware tenant host, e.g. `https://<tenant>.unicommerce.com` |
-| `DABUR_USERNAME`, `DABUR_PASSWORD` | | Uniware API user (OAuth password grant) |
-| `DABUR_CLIENT_ID` | `my-trusted-client` | OAuth client id documented by Uniware |
-| `DABUR_DEFAULT_FACILITY` | | Facility used when a route has no destination reference |
-| `DABUR_CHANNEL` | | Channel code stamped on created orders |
-| `DABUR_SHELF_CODE` | `DEFAULT` | Shelf receiving inventory adjustments |
-| `DABUR_VERIFICATION_REQUIRED` | `false` | Hold created orders for manual verification |
-| `DABUR_TIMEOUT` | `20s` | Per-attempt timeout for Uniware calls |
+| `VINCULUM_BASE_URL` | `https://erp.vineretail.com` | Vinculum eRetail host |
+| `VINCULUM_API_OWNER`, `VINCULUM_API_KEY` | | The two static headers every Vinculum call carries |
+| `VINCULUM_LOCATION` | | Default three-character `orderLocation`; a route's vendor reference overrides it |
+| `VINCULUM_SELLABLE_BUCKET` | | Stock bucket the storefront may sell from; blank accepts every bucket |
+| `VINCULUM_TIMEOUT` | `20s` | Per-attempt timeout for Vinculum calls |
+| `VINCULUM_ORDER_RATE_LIMIT` | `80` | Maximum order creations per window (Vinculum's documented ceiling) |
+| `VINCULUM_ORDER_RATE_WINDOW` | `5m` | The window that limit applies over |
+| `VINCULUM_DUPLICATE_ORDER_CODES` | | Comma-separated `responseCode` values meaning "order already exists"; empty falls back to matching the vendor's message |
+| `SCHEDULER_ENABLED` | `true` | Publish periodic work from this instance |
+| `SCHEDULER_POLL_INTERVAL` | `30s` | How often due jobs are looked for; not a job's own interval |
+| `SCHEDULER_LOCK_TTL` | `5m` | How long a run holds its job lock; must exceed a normal run |
+| `STOCK_SYNC_INTERVAL` | `15m` | How often changed vendor stock is pushed to EasyEcom |
+| `STOCK_SYNC_FULL_INTERVAL` | `24h` | How often every SKU is pushed, ignoring `inventory_state`, to repair drift |
+| `SHIPMENT_SYNC_INTERVAL` | `15m` | How often dispatch records are read from the vendor |
+| `SHIPMENT_SYNC_MAX_WINDOW` | `24h` | Cap on one run's period, so a backlog drains in chunks |
+| `RECONCILE_INTERVAL` | `1h` | How often to look for runs that stopped progressing |
+| `RECONCILE_THRESHOLD` | `30m` | How long a run may sit untouched before it is reported; must exceed `WORKER_RETRY_FAILED_AFTER` |
+| `EASYECOM_SHIPMENT_STATUS_IDS` | | Delivery statuses as EasyEcom numbers them (`SHIPPED=3,DELIVERED=7`). Unset statuses are not pushed rather than guessed |
 | `WORKER_ENABLED` | `true` | Run the job worker in this process; `false` gives an intake-only instance |
 | `WORKER_CONCURRENCY` | `4` | Jobs processed concurrently |
 | `WORKER_MAX_AUTO_RESUMES` | `3` | Automatic resumes of a failed run with a transient error |
@@ -56,9 +68,14 @@ secret manager. Never commit `.env`.
 | `WORKER_STALE_RUNNING_AFTER` | `10m` | Age after which a running run is treated as abandoned by a periodic scan |
 | `WORKER_RETRY_FAILED_AFTER` | `1m` | Cooling period before a transient failure is resumed |
 
-When the worker is enabled, EasyEcom and Dabur credentials are required and
-validated at startup. Run intake-only instances (`WORKER_ENABLED=false`)
-without them. Workflow state is stored on local disk under
+The Vinculum client reads stock and dispatch records. No workflow calls it
+yet, so the `VINCULUM_*` variables may be left blank; the client validates
+them only when it is built.
+
+When the worker is enabled, EasyEcom credentials are required and validated
+at startup. Run intake-only instances (`WORKER_ENABLED=false`) without them.
+A worker that starts with an empty vendor registry logs a warning and leaves
+`ORDER_SYNC` unregistered rather than failing. Workflow state is stored on local disk under
 `WORKFLOW_DIRECTORY`, so each worker instance owns the runs it started;
 scale by adding instances behind the same Redis stream.
 | `LOG_DIRECTORY` | `./storage/logs` | Root of date-partitioned JSONL execution logs |
@@ -132,4 +149,5 @@ The `tests` package runs against a real PostgreSQL: it uses `TEST_DATABASE_URL`
 when set and otherwise starts an embedded PostgreSQL 16, downloading its
 binaries once into `~/.embedded-postgres-go`. Use `go test -short ./...` to
 skip it. Per-package tests that need live infrastructure are skipped unless
-`TEST_DATABASE_URL` and `TEST_REDIS_URL` are set.
+`TEST_DATABASE_URL` and `TEST_REDIS_URL` are set (`TEST_REDIS_PASSWORD` is
+optional alongside the latter).

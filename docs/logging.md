@@ -22,7 +22,7 @@ storage/logs/
 Each line is one JSON document:
 
 ```json
-{"timestamp":"2026-09-12T10:30:01Z","correlation_id":"INT-1001","workflow":"ORDER_SYNC","platform":"easyecom","integration":"dabur","external_order_id":"9876543","action":"FETCH_ORDER","status":"SUCCESS","attempt":1,"duration_ms":420}
+{"timestamp":"2026-09-12T10:30:01Z","correlation_id":"INT-1001","workflow":"ORDER_SYNC","platform":"easyecom","integration":"vinculum","external_order_id":"9876543","action":"FETCH_ORDER","status":"SUCCESS","attempt":1,"duration_ms":420}
 ```
 
 | Field | Meaning |

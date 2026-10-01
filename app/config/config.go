@@ -26,16 +26,60 @@ const ServiceName = "gluzo-integration-gateway"
 
 // Config is the fully resolved configuration for one process.
 type Config struct {
-	App      App
-	HTTP     HTTP
-	Database Database
-	Redis    Redis
-	Storage  Storage
-	Queue    Queue
-	Worker   Worker
-	Admin    Admin
-	EasyEcom EasyEcom
-	Dabur    Dabur
+	App       App
+	HTTP      HTTP
+	Database  Database
+	Redis     Redis
+	Storage   Storage
+	Queue     Queue
+	Worker    Worker
+	Admin     Admin
+	EasyEcom  EasyEcom
+	Vinculum  Vinculum
+	Scheduler Scheduler
+}
+
+// Scheduler tunes the periodic job publisher. Enabled=false leaves periodic
+// work unpublished, which is the right setting for an intake-only instance.
+//
+// PollInterval is not a job's interval: it is how often the loop looks for
+// due work, so a replica that has just started discovers an overdue job
+// within one poll rather than within one job interval.
+//
+// LockTTL bounds how long a crashed replica keeps others out of a job. It
+// must exceed a normal run and stay well under the shortest job interval.
+type Scheduler struct {
+	Enabled      bool
+	PollInterval time.Duration
+	LockTTL      time.Duration
+
+	// StockInterval is how often the incremental stock sweep runs.
+	//
+	// It is a trade between how stale the storefront may be and how much of
+	// the vendor's rate limit the sweep consumes. Most sweeps push nothing,
+	// because only changed quantities are sent.
+	StockInterval time.Duration
+	// StockFullInterval is how often every SKU is pushed regardless of what
+	// was last recorded. This repairs drift left by a run that wrote the
+	// platform and failed before recording it, so it is a period rather
+	// than an operator action: drift nobody looks for is drift that stays.
+	StockFullInterval time.Duration
+
+	// ShipmentInterval is how often dispatch records are read from the
+	// vendor, and ShipmentMaxWindow caps how much time one run may cover so
+	// a backlog after an outage drains in chunks.
+	ShipmentInterval  time.Duration
+	ShipmentMaxWindow time.Duration
+
+	// ReconcileInterval is how often the gateway looks for work it has
+	// stopped making progress on, and ReconcileThreshold is how long a run
+	// may sit untouched before it is reported.
+	//
+	// The threshold must exceed the worker's retry and recovery intervals,
+	// or every run in ordinary retry would be reported as stuck and the
+	// report would be worthless.
+	ReconcileInterval  time.Duration
+	ReconcileThreshold time.Duration
 }
 
 // Admin protects the operator endpoints. An empty token leaves them
@@ -53,20 +97,6 @@ type Worker struct {
 	RecoveryInterval  time.Duration
 	StaleRunningAfter time.Duration
 	RetryFailedAfter  time.Duration
-}
-
-// Dabur holds credentials for Dabur's Uniware tenant. Presence is validated
-// when the Dabur client is built (worker enabled).
-type Dabur struct {
-	BaseURL              string
-	Username             string
-	Password             string
-	ClientID             string
-	DefaultFacility      string
-	Channel              string
-	ShelfCode            string
-	VerificationRequired bool
-	Timeout              time.Duration
 }
 
 // Queue tunes the Redis Streams job queue.
@@ -92,7 +122,45 @@ type EasyEcom struct {
 	Email       string
 	Password    string
 	LocationKey string
-	Timeout     time.Duration
+
+	// ShipmentStatusIDs maps the domain's delivery statuses to EasyEcom's
+	// own numeric enumeration, as "SHIPPED=3,DELIVERED=7". Unset statuses
+	// are not pushed: the gateway will not guess an id, because a wrong one
+	// puts an order into a state nobody asked for, silently.
+	ShipmentStatusIDs map[string]string
+
+	Timeout time.Duration
+}
+
+// Vinculum holds credentials for outbound Vinculum eRetail calls.
+//
+// Vinculum authenticates with two static headers and issues no token, so
+// there is nothing to refresh and nothing to cache. Location is the default
+// three-character orderLocation used when a route carries no vendor
+// reference; SellableBucket names the stock bucket the storefront may sell
+// from. Both are deployment configuration, never code.
+//
+// Presence is validated when the Vinculum client is built, so a process that
+// only receives webhooks can start without any of it.
+type Vinculum struct {
+	BaseURL  string
+	APIOwner string
+	APIKey   string
+
+	Location       string
+	SellableBucket string
+
+	// DuplicateOrderCodes are the responseCode values that mean "this order
+	// number already exists". Empty falls back to matching the vendor's
+	// message; failing to recognise a duplicate is safe, because Vinculum
+	// does the rejecting and the run fails visibly rather than duplicating.
+	DuplicateOrderCodes []string
+	// OrderRateLimit and OrderRateWindow bound order creation. Vinculum
+	// documents 80 calls per 5 minutes.
+	OrderRateLimit  int
+	OrderRateWindow time.Duration
+
+	Timeout time.Duration
 }
 
 // App holds process-level settings.
@@ -123,8 +191,15 @@ type Database struct {
 }
 
 // Redis holds Redis connection settings.
+// Redis locates the job queue.
+//
+// Password is optional. It overrides any password in URL, so an instance
+// whose password needs percent-encoding inside a URL can be configured
+// without that encoding step, which fails as an authentication error rather
+// than visibly.
 type Redis struct {
 	URL            string
+	Password       string
 	ConnectTimeout time.Duration
 }
 
@@ -172,6 +247,7 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 		},
 		Redis: Redis{
 			URL:            r.str("REDIS_URL", ""),
+			Password:       r.str("REDIS_PASSWORD", ""),
 			ConnectTimeout: r.duration("REDIS_CONNECT_TIMEOUT", 5*time.Second),
 		},
 		Storage: Storage{
@@ -207,18 +283,37 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 			Email:       r.str("EASYECOM_EMAIL", ""),
 			Password:    r.str("EASYECOM_PASSWORD", ""),
 			LocationKey: r.str("EASYECOM_LOCATION_KEY", ""),
-			Timeout:     r.duration("EASYECOM_TIMEOUT", 15*time.Second),
+
+			ShipmentStatusIDs: r.pairs("EASYECOM_SHIPMENT_STATUS_IDS"),
+
+			Timeout: r.duration("EASYECOM_TIMEOUT", 15*time.Second),
 		},
-		Dabur: Dabur{
-			BaseURL:              r.str("DABUR_BASE_URL", ""),
-			Username:             r.str("DABUR_USERNAME", ""),
-			Password:             r.str("DABUR_PASSWORD", ""),
-			ClientID:             r.str("DABUR_CLIENT_ID", "my-trusted-client"),
-			DefaultFacility:      r.str("DABUR_DEFAULT_FACILITY", ""),
-			Channel:              r.str("DABUR_CHANNEL", ""),
-			ShelfCode:            r.str("DABUR_SHELF_CODE", "DEFAULT"),
-			VerificationRequired: r.bool("DABUR_VERIFICATION_REQUIRED", false),
-			Timeout:              r.duration("DABUR_TIMEOUT", 20*time.Second),
+		Scheduler: Scheduler{
+			Enabled:      r.bool("SCHEDULER_ENABLED", true),
+			PollInterval: r.duration("SCHEDULER_POLL_INTERVAL", 30*time.Second),
+			LockTTL:      r.duration("SCHEDULER_LOCK_TTL", 5*time.Minute),
+
+			StockInterval:     r.duration("STOCK_SYNC_INTERVAL", 15*time.Minute),
+			StockFullInterval: r.duration("STOCK_SYNC_FULL_INTERVAL", 24*time.Hour),
+
+			ShipmentInterval:  r.duration("SHIPMENT_SYNC_INTERVAL", 15*time.Minute),
+			ShipmentMaxWindow: r.duration("SHIPMENT_SYNC_MAX_WINDOW", 24*time.Hour),
+
+			ReconcileInterval:  r.duration("RECONCILE_INTERVAL", time.Hour),
+			ReconcileThreshold: r.duration("RECONCILE_THRESHOLD", 30*time.Minute),
+		},
+		Vinculum: Vinculum{
+			BaseURL:        r.str("VINCULUM_BASE_URL", "https://erp.vineretail.com"),
+			APIOwner:       r.str("VINCULUM_API_OWNER", ""),
+			APIKey:         r.str("VINCULUM_API_KEY", ""),
+			Location:       r.str("VINCULUM_LOCATION", ""),
+			SellableBucket: r.str("VINCULUM_SELLABLE_BUCKET", ""),
+
+			DuplicateOrderCodes: r.list("VINCULUM_DUPLICATE_ORDER_CODES"),
+			OrderRateLimit:      r.int("VINCULUM_ORDER_RATE_LIMIT", 80),
+			OrderRateWindow:     r.duration("VINCULUM_ORDER_RATE_WINDOW", 5*time.Minute),
+
+			Timeout: r.duration("VINCULUM_TIMEOUT", 20*time.Second),
 		},
 	}
 
@@ -276,11 +371,19 @@ func (c *Config) Validate() error {
 	if c.Queue.MaxLen < 1 {
 		errs = append(errs, errors.New("QUEUE_MAX_LEN must be at least 1"))
 	}
+	if c.Vinculum.OrderRateLimit < 1 {
+		errs = append(errs, errors.New("VINCULUM_ORDER_RATE_LIMIT must be at least 1"))
+	}
 	if c.Worker.Concurrency < 1 {
 		errs = append(errs, errors.New("WORKER_CONCURRENCY must be at least 1"))
 	}
 	if c.Worker.MaxAutoResumes < 0 {
 		errs = append(errs, errors.New("WORKER_MAX_AUTO_RESUMES must not be negative"))
+	}
+	if c.Scheduler.ReconcileThreshold > 0 && c.Scheduler.ReconcileThreshold <= c.Worker.RetryFailedAfter {
+		// Otherwise every run waiting for its ordinary auto-resume is
+		// reported as stuck, and an operator learns to ignore the report.
+		errs = append(errs, errors.New("RECONCILE_THRESHOLD must be longer than WORKER_RETRY_FAILED_AFTER"))
 	}
 
 	durations := []struct {
@@ -295,13 +398,22 @@ func (c *Config) Validate() error {
 		{"DATABASE_CONNECT_TIMEOUT", c.Database.ConnectTimeout},
 		{"REDIS_CONNECT_TIMEOUT", c.Redis.ConnectTimeout},
 		{"EASYECOM_TIMEOUT", c.EasyEcom.Timeout},
+		{"VINCULUM_TIMEOUT", c.Vinculum.Timeout},
+		{"VINCULUM_ORDER_RATE_WINDOW", c.Vinculum.OrderRateWindow},
+		{"SCHEDULER_POLL_INTERVAL", c.Scheduler.PollInterval},
+		{"SCHEDULER_LOCK_TTL", c.Scheduler.LockTTL},
+		{"STOCK_SYNC_INTERVAL", c.Scheduler.StockInterval},
+		{"STOCK_SYNC_FULL_INTERVAL", c.Scheduler.StockFullInterval},
+		{"SHIPMENT_SYNC_INTERVAL", c.Scheduler.ShipmentInterval},
+		{"SHIPMENT_SYNC_MAX_WINDOW", c.Scheduler.ShipmentMaxWindow},
+		{"RECONCILE_INTERVAL", c.Scheduler.ReconcileInterval},
+		{"RECONCILE_THRESHOLD", c.Scheduler.ReconcileThreshold},
 		{"QUEUE_BLOCK_TIMEOUT", c.Queue.BlockTimeout},
 		{"QUEUE_CLAIM_MIN_IDLE", c.Queue.ClaimMinIdle},
 		{"LOG_RETENTION_INTERVAL", c.Storage.LogRetentionInterval},
 		{"WORKER_RECOVERY_INTERVAL", c.Worker.RecoveryInterval},
 		{"WORKER_STALE_RUNNING_AFTER", c.Worker.StaleRunningAfter},
 		{"WORKER_RETRY_FAILED_AFTER", c.Worker.RetryFailedAfter},
-		{"DABUR_TIMEOUT", c.Dabur.Timeout},
 	}
 	for _, d := range durations {
 		if d.value <= 0 {
@@ -333,6 +445,51 @@ func (r *reader) str(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// list reads a comma-separated value into a slice, dropping blanks. Absent
+// and empty both give nil, so "not configured" is one case rather than two.
+func (r *reader) list(key string) []string {
+	v, ok := r.raw(key)
+	if !ok {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(v, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
+// pairs reads a comma-separated list of NAME=VALUE entries. Absent, empty
+// and malformed-only all give nil, and a malformed entry is reported rather
+// than silently dropped: a status mapping that half-loaded would push some
+// statuses and quietly skip others.
+func (r *reader) pairs(key string) map[string]string {
+	v, ok := r.raw(key)
+	if !ok {
+		return nil
+	}
+	out := make(map[string]string)
+	for _, entry := range strings.Split(v, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, value, found := strings.Cut(entry, "=")
+		name, value = strings.TrimSpace(name), strings.TrimSpace(value)
+		if !found || name == "" || value == "" {
+			r.errs = append(r.errs, fmt.Errorf("%s: expected NAME=VALUE entries, got %q", key, entry))
+			return nil
+		}
+		out[strings.ToUpper(name)] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func (r *reader) int(key string, def int) int {

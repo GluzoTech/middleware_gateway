@@ -1,10 +1,11 @@
 // Package inventory holds the EasyEcom inventory contracts.
 //
 // TODO(VERIFY): the Get Inventory Details V2 contract could not be confirmed
-// against the EasyEcom API reference, which is not machine-readable. The
-// request parameter and response field names below follow EasyEcom's public
-// naming conventions and MUST be checked against api-docs.easyecom.io before
-// the inventory actions are enabled in production.
+// against the EasyEcom API reference, which is not machine-readable, and the
+// Postman collection read on 29 September 2026 covers the inventory write
+// endpoints rather than this read. The names below therefore remain
+// unverified. Nothing calls them: under dropship the vendor owns the stock
+// and the gateway writes it into EasyEcom rather than reading it back.
 package inventory
 
 import (

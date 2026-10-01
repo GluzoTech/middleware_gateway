@@ -21,6 +21,16 @@ const (
 	OrderCancelled   = "ORDER_CANCELLED"
 	InventoryUpdated = "INVENTORY_UPDATED"
 	TrackingUpdated  = "TRACKING_UPDATED"
+
+	// StockSyncDue is raised by the scheduler rather than by a platform: a
+	// dropship vendor cannot call us, so a stock sweep is something the
+	// gateway decides to do. It travels the same queue and workflow path as
+	// an inbound event so that nothing bypasses the execution log.
+	StockSyncDue = "STOCK_SYNC_DUE"
+	// ShipmentSyncDue is likewise raised by the scheduler: under dropship
+	// the vendor books the courier and cannot call us, so dispatch is
+	// pulled.
+	ShipmentSyncDue = "SHIPMENT_SYNC_DUE"
 )
 
 // IsOrderEvent reports whether t concerns a single order.
@@ -80,6 +90,13 @@ func Validate(e Event) error {
 		}
 		if strings.TrimSpace(e.RoutingKey.Type) == "" || strings.TrimSpace(e.RoutingKey.Value) == "" {
 			errs = append(errs, errors.New("routing key is required for order events"))
+		}
+	case StockSyncDue, ShipmentSyncDue:
+		// A sweep addresses a location rather than an order, so it needs a
+		// routing key and no order id. Requiring the key is what stops a
+		// malformed scheduled job from being read as "sweep everything".
+		if strings.TrimSpace(e.RoutingKey.Type) == "" || strings.TrimSpace(e.RoutingKey.Value) == "" {
+			errs = append(errs, errors.New("routing key is required for scheduled sweeps"))
 		}
 	case InventoryUpdated, TrackingUpdated, "":
 	default:

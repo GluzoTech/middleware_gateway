@@ -23,7 +23,7 @@ func TestAuthStorePlatforms(t *testing.T) {
 	if key == "" {
 		t.Fatal("source platform received no API key")
 	}
-	dst, dstKey, err := store.CreatePlatform(ctx, "dabur-"+suffix, auth.PlatformTypeDestination)
+	dst, dstKey, err := store.CreatePlatform(ctx, "vinculum-"+suffix, auth.PlatformTypeDestination)
 	if err != nil {
 		t.Fatalf("CreatePlatform destination: %v", err)
 	}
@@ -94,12 +94,12 @@ func TestAuthStoreIntegrationsAndTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreatePlatform: %v", err)
 	}
-	dst, _, err := store.CreatePlatform(ctx, "dabur-"+suffix, auth.PlatformTypeDestination)
+	dst, _, err := store.CreatePlatform(ctx, "vinculum-"+suffix, auth.PlatformTypeDestination)
 	if err != nil {
 		t.Fatalf("CreatePlatform: %v", err)
 	}
 
-	integ, err := store.CreateIntegration(ctx, "easyecom-dabur-"+suffix, src.Name, dst.Name)
+	integ, err := store.CreateIntegration(ctx, "easyecom-vinculum-"+suffix, src.Name, dst.Name)
 	if err != nil {
 		t.Fatalf("CreateIntegration: %v", err)
 	}

@@ -19,7 +19,7 @@
     "order_items": [
       {
         "suborder_id": 7001,
-        "sku": "DAB-AML-200",
+        "sku": "BCP-AML-200",
         "product_id": 780,
         "suborder_quantity": 1,
         "tax_rate": 12,

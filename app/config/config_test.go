@@ -74,25 +74,56 @@ func TestLoadFrom(t *testing.T) {
 			wantErr: "QUEUE_MAX_DELIVERIES must be at least 1",
 		},
 		{
-			name: "worker and dabur settings are read",
+			name: "worker settings are read",
 			env: merge(base, map[string]string{
-				"WORKER_ENABLED":              "false",
-				"WORKER_CONCURRENCY":          "2",
-				"DABUR_BASE_URL":              "https://dabur.unicommerce.com",
-				"DABUR_USERNAME":              "api",
-				"DABUR_PASSWORD":              "pw",
-				"DABUR_DEFAULT_FACILITY":      "DEL",
-				"DABUR_VERIFICATION_REQUIRED": "true",
+				"WORKER_ENABLED":     "false",
+				"WORKER_CONCURRENCY": "2",
 			}),
 			check: func(t *testing.T, cfg *config.Config) {
 				if cfg.Worker.Enabled || cfg.Worker.Concurrency != 2 || cfg.Worker.MaxAutoResumes != 3 {
 					t.Errorf("worker config = %+v", cfg.Worker)
 				}
-				d := cfg.Dabur
-				if d.BaseURL != "https://dabur.unicommerce.com" || d.Username != "api" || d.Password != "pw" || d.DefaultFacility != "DEL" || !d.VerificationRequired || d.ClientID != "my-trusted-client" || d.ShelfCode != "DEFAULT" {
-					t.Errorf("dabur config = %+v", d)
+			},
+		},
+		{
+			name: "vinculum settings are read",
+			env: merge(base, map[string]string{
+				"VINCULUM_API_OWNER":       "gluzo",
+				"VINCULUM_API_KEY":         "vk",
+				"VINCULUM_LOCATION":        "DEL",
+				"VINCULUM_SELLABLE_BUCKET": "Good",
+				"VINCULUM_TIMEOUT":         "30s",
+			}),
+			check: func(t *testing.T, cfg *config.Config) {
+				v := cfg.Vinculum
+				if v.BaseURL != "https://erp.vineretail.com" || v.APIOwner != "gluzo" || v.APIKey != "vk" || v.Location != "DEL" || v.SellableBucket != "Good" || v.Timeout != 30*time.Second {
+					t.Errorf("vinculum config = %+v", v)
 				}
 			},
+		},
+		{
+			name: "scheduler settings are read",
+			env: merge(base, map[string]string{
+				"SCHEDULER_ENABLED":       "false",
+				"SCHEDULER_POLL_INTERVAL": "10s",
+				"SCHEDULER_LOCK_TTL":      "2m",
+			}),
+			check: func(t *testing.T, cfg *config.Config) {
+				s := cfg.Scheduler
+				if s.Enabled || s.PollInterval != 10*time.Second || s.LockTTL != 2*time.Minute {
+					t.Errorf("scheduler config = %+v", s)
+				}
+			},
+		},
+		{
+			name:    "scheduler lock ttl must be positive",
+			env:     merge(base, map[string]string{"SCHEDULER_LOCK_TTL": "0s"}),
+			wantErr: "SCHEDULER_LOCK_TTL must be a positive duration",
+		},
+		{
+			name:    "vinculum timeout must be positive",
+			env:     merge(base, map[string]string{"VINCULUM_TIMEOUT": "0s"}),
+			wantErr: "VINCULUM_TIMEOUT must be a positive duration",
 		},
 		{
 			name:    "worker enabled must be boolean",

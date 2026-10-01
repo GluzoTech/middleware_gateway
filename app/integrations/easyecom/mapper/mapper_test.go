@@ -68,7 +68,7 @@ func TestToDomainOrder(t *testing.T) {
 		t.Fatalf("items = %d, want 2", len(got.Items))
 	}
 	first := got.Items[0]
-	if first.ExternalID != "555001" || first.SKU != "DAB-CHY-500" || first.Quantity != 2 || first.UnitPrice != 499.75 || first.Total != 999.5 || first.TaxRate != 18 || first.TaxType != "GST" || first.Name != "Dabur Chyawanprash 500g" {
+	if first.ExternalID != "555001" || first.SKU != "BCP-CHY-500" || first.Quantity != 2 || first.UnitPrice != 499.75 || first.Total != 999.5 || first.TaxRate != 18 || first.TaxType != "GST" || first.Name != "Herbal Chyawanprash 500g" {
 		t.Errorf("first item: %+v", first)
 	}
 	if got.TotalQuantity() != 3 {

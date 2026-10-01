@@ -23,6 +23,7 @@ import (
 
 	"github.com/gluzo/integration-gateway/app/correlation"
 	"github.com/gluzo/integration-gateway/app/intlog"
+	"github.com/gluzo/integration-gateway/app/reconcile"
 	"github.com/gluzo/integration-gateway/app/worker"
 	"github.com/gluzo/integration-gateway/app/workflow"
 )
@@ -35,19 +36,36 @@ type Resumer interface {
 	Resume(ctx context.Context, correlationID string) error
 }
 
+// Scanner reports runs that are not progressing; app/reconcile implements it.
+type Scanner interface {
+	Scan(ctx context.Context) ([]reconcile.Finding, error)
+	Threshold() time.Duration
+}
+
 // Handler serves the admin routes.
 type Handler struct {
 	reader  *intlog.Reader
 	states  workflow.Repository
 	resumer Resumer
+	scanner Scanner
 	logger  *slog.Logger
 	tmpl    *template.Template
 	now     func() time.Time
 }
 
+// WithScanner mounts the reconciliation view. Without one the route reports
+// that reconciliation is unavailable rather than showing an empty page that
+// looks like good news.
+func WithScanner(s Scanner) Option {
+	return func(h *Handler) { h.scanner = s }
+}
+
+// Option configures a Handler.
+type Option func(*Handler)
+
 // NewHandler builds the handler. resumer may be nil on intake-only
 // instances, in which case resume requests are refused.
-func NewHandler(reader *intlog.Reader, states workflow.Repository, resumer Resumer, logger *slog.Logger) (*Handler, error) {
+func NewHandler(reader *intlog.Reader, states workflow.Repository, resumer Resumer, logger *slog.Logger, opts ...Option) (*Handler, error) {
 	if reader == nil {
 		return nil, errors.New("admin: log reader is required")
 	}
@@ -63,7 +81,11 @@ func NewHandler(reader *intlog.Reader, states workflow.Repository, resumer Resum
 	if err != nil {
 		return nil, fmt.Errorf("admin: parse templates: %w", err)
 	}
-	return &Handler{reader: reader, states: states, resumer: resumer, logger: logger, tmpl: tmpl, now: time.Now}, nil
+	h := &Handler{reader: reader, states: states, resumer: resumer, logger: logger, tmpl: tmpl, now: time.Now}
+	for _, opt := range opts {
+		opt(h)
+	}
+	return h, nil
 }
 
 // Register mounts the routes on g, which the router has already protected.
@@ -73,6 +95,64 @@ func (h *Handler) Register(g *gin.RouterGroup) {
 	g.GET("/logs/:correlationId", h.Timeline)
 	g.GET("/workflows/:correlationId", h.Workflow)
 	g.POST("/workflows/:correlationId/resume", h.Resume)
+	g.GET("/reconcile", h.Reconcile)
+}
+
+// Reconcile lists runs that are not progressing.
+//
+// The scan runs on request rather than from a cache: an operator opening this
+// page is usually reacting to something, and a stale answer is worse than a
+// slow one.
+func (h *Handler) Reconcile(c *gin.Context) {
+	if h.scanner == nil {
+		h.fail(c, http.StatusServiceUnavailable, "reconciliation is not available on this instance")
+		return
+	}
+	findings, err := h.scanner.Scan(c.Request.Context())
+	if err != nil {
+		h.logger.ErrorContext(c.Request.Context(), "reconciliation scan failed", slog.String("error", err.Error()))
+		h.fail(c, http.StatusInternalServerError, "reconciliation scan failed")
+		return
+	}
+
+	summary := reconcile.Summarise(findings)
+	if wantsJSON(c, c.Query("format")) {
+		c.JSON(http.StatusOK, gin.H{
+			"threshold":      h.scanner.Threshold().String(),
+			"total":          summary.Total,
+			"needing_action": summary.NeedingAction,
+			"findings":       toViews(findings),
+		})
+		return
+	}
+	h.render(c, "reconcile.html", gin.H{"View": gin.H{
+		"Threshold":      h.scanner.Threshold().String(),
+		"Findings":       toViews(findings),
+		"Summary":        summary,
+		"OldestStuckFor": summary.OldestStuckFor.Round(time.Second).String(),
+	}})
+}
+
+// findingView is a Finding with its durations already rendered, so the
+// template holds no formatting logic.
+type findingView struct {
+	reconcile.Finding
+	StuckForText  string `json:"stuck_for"`
+	VendorMessage string `json:"vendor_message,omitempty"`
+	NeedsOperator bool   `json:"needs_operator"`
+}
+
+func toViews(findings []reconcile.Finding) []findingView {
+	out := make([]findingView, 0, len(findings))
+	for _, f := range findings {
+		out = append(out, findingView{
+			Finding:       f,
+			StuckForText:  f.StuckFor.Round(time.Second).String(),
+			VendorMessage: f.VendorMessage(),
+			NeedsOperator: f.NeedsOperator(),
+		})
+	}
+	return out
 }
 
 // searchForm is what the search page and JSON endpoint accept.

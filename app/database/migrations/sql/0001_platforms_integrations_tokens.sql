@@ -15,7 +15,7 @@ COMMENT ON COLUMN platforms.api_key_hash IS
     'SHA-256 hex digest of the platform API key; the plaintext is never stored';
 
 -- An integration is one configured pipeline from a source platform to a
--- destination platform (for example EasyEcom -> Dabur).
+-- destination platform (for example EasyEcom -> Vinculum).
 CREATE TABLE integrations (
     id                      UUID        PRIMARY KEY,
     name                    TEXT        NOT NULL UNIQUE,

@@ -44,7 +44,7 @@ type Entry struct {
 	Workflow      string    `json:"workflow,omitempty"`
 	// Platform is the source platform (e.g. easyecom).
 	Platform string `json:"platform,omitempty"`
-	// Integration is the destination platform or integration name (e.g. dabur).
+	// Integration is the destination platform or integration name (e.g. vinculum).
 	Integration   string `json:"integration,omitempty"`
 	IntegrationID string `json:"integration_id,omitempty"`
 	// ExternalOrderID is the source platform's order identifier; OrderID is
