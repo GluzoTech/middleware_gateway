@@ -1,4 +1,4 @@
-.PHONY: fmt vet test test-race check build run tidy docker-up docker-down
+.PHONY: fmt vet test test-race check build run devstack tidy docker-up docker-down
 
 BINARY  ?= bin/server
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
@@ -22,6 +22,11 @@ build:
 
 run:
 	go run ./cmd/server
+
+# The whole stack on a machine with no Docker, no PostgreSQL and no Redis:
+# embedded infrastructure, stub vendors, one order driven end to end.
+devstack:
+	go run ./cmd/devstack
 
 tidy:
 	go mod tidy

@@ -24,10 +24,12 @@ secret manager. Never commit `.env`.
 | `HTTP_WRITE_TIMEOUT` | `30s` | Response write deadline |
 | `HTTP_IDLE_TIMEOUT` | `60s` | Keep-alive idle deadline |
 | `HTTP_MAX_BODY_BYTES` | `1048576` | Cap on inbound request bodies |
+| `ENV_FILE` | `.env` | Env file read at start-up, if present; never overrides a variable the environment already sets |
 | `DATABASE_URL` | required | PostgreSQL connection URL |
 | `DATABASE_MAX_CONNS` | `10` | Pool size |
 | `DATABASE_CONNECT_TIMEOUT` | `5s` | Connect and startup ping deadline |
 | `REDIS_URL` | required | `redis://` or `rediss://` URL |
+| `REDIS_PASSWORD` | _(none)_ | Overrides any password in `REDIS_URL`; avoids percent-encoding it |
 | `REDIS_CONNECT_TIMEOUT` | `5s` | Dial and startup ping deadline |
 | `QUEUE_STREAM` | `gluzo:jobs` | Redis stream holding queued jobs |
 | `QUEUE_GROUP` | `gateway-workers` | Consumer group name |
@@ -147,4 +149,5 @@ The `tests` package runs against a real PostgreSQL: it uses `TEST_DATABASE_URL`
 when set and otherwise starts an embedded PostgreSQL 16, downloading its
 binaries once into `~/.embedded-postgres-go`. Use `go test -short ./...` to
 skip it. Per-package tests that need live infrastructure are skipped unless
-`TEST_DATABASE_URL` and `TEST_REDIS_URL` are set.
+`TEST_DATABASE_URL` and `TEST_REDIS_URL` are set (`TEST_REDIS_PASSWORD` is
+optional alongside the latter).

@@ -23,6 +23,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/couriermap"
 	"github.com/gluzo/integration-gateway/app/database/migrations"
 	"github.com/gluzo/integration-gateway/app/database/postgres"
+	"github.com/gluzo/integration-gateway/app/dotenv"
 	"github.com/gluzo/integration-gateway/app/routing"
 	"github.com/gluzo/integration-gateway/app/skumap"
 )
@@ -56,6 +57,8 @@ Usage:
 
 Environment:
   DATABASE_URL  PostgreSQL connection URL (required)
+  ENV_FILE      env file to read first; defaults to .env when present.
+                Variables already set in the environment are left alone.
 
 Generated API keys and tokens are shown once. Store them in your secret
 manager immediately; they cannot be recovered afterwards.
@@ -64,6 +67,12 @@ manager immediately; they cannot be recovered afterwards.
 var errUsage = errors.New("usage")
 
 func main() {
+	// Loading the file here rather than inside run keeps run a pure function
+	// of its lookup argument, which is how the command is tested.
+	if _, err := dotenv.Load(""); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
 	if err := run(os.Args[1:], os.Stdout, os.Stderr, os.LookupEnv); err != nil {
 		if errors.Is(err, errUsage) {
 			fmt.Fprint(os.Stderr, usage)

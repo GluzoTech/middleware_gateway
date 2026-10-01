@@ -110,7 +110,10 @@ func Apply(ctx context.Context, pool *pgxpool.Pool, fsys fs.FS, logger *slog.Log
 		if err := applyOne(ctx, conn, m); err != nil {
 			return err
 		}
-		logger.Info("migration applied", slog.String("version", m.Version))
+		// Not "version": the server binds its own build version to the
+		// logger, and two identical keys in one JSON line resolve
+		// arbitrarily in whatever ingests the logs.
+		logger.Info("migration applied", slog.String("migration", m.Version))
 	}
 	return nil
 }

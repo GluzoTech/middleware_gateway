@@ -24,6 +24,7 @@ import (
 	"github.com/gluzo/integration-gateway/app/database/postgres"
 	"github.com/gluzo/integration-gateway/app/database/redisconn"
 	"github.com/gluzo/integration-gateway/app/domain/tracking"
+	"github.com/gluzo/integration-gateway/app/dotenv"
 	"github.com/gluzo/integration-gateway/app/event"
 	"github.com/gluzo/integration-gateway/app/health"
 	"github.com/gluzo/integration-gateway/app/httpserver"
@@ -62,6 +63,13 @@ func main() {
 }
 
 func run() error {
+	// A .env file, when there is one, fills in variables the environment has
+	// not already set. Deployments ship no such file and are unaffected.
+	envFile, err := dotenv.Load("")
+	if err != nil {
+		return err
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
@@ -73,6 +81,10 @@ func run() error {
 	}
 	logger = logger.With(slog.String("env", cfg.App.Env), slog.String("version", version))
 	slog.SetDefault(logger)
+
+	if envFile != "" {
+		logger.Info("environment file loaded", slog.String("path", envFile))
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -98,7 +110,11 @@ func run() error {
 		return err
 	}
 
-	rdb, err := redisconn.Connect(ctx, cfg.Redis.URL, cfg.Redis.ConnectTimeout)
+	rdb, err := redisconn.Connect(ctx, redisconn.Config{
+		URL:            cfg.Redis.URL,
+		Password:       cfg.Redis.Password,
+		ConnectTimeout: cfg.Redis.ConnectTimeout,
+	})
 	if err != nil {
 		return err
 	}

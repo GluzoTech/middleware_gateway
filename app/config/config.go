@@ -191,8 +191,15 @@ type Database struct {
 }
 
 // Redis holds Redis connection settings.
+// Redis locates the job queue.
+//
+// Password is optional. It overrides any password in URL, so an instance
+// whose password needs percent-encoding inside a URL can be configured
+// without that encoding step, which fails as an authentication error rather
+// than visibly.
 type Redis struct {
 	URL            string
+	Password       string
 	ConnectTimeout time.Duration
 }
 
@@ -240,6 +247,7 @@ func LoadFrom(lookup Lookup) (*Config, error) {
 		},
 		Redis: Redis{
 			URL:            r.str("REDIS_URL", ""),
+			Password:       r.str("REDIS_PASSWORD", ""),
 			ConnectTimeout: r.duration("REDIS_CONNECT_TIMEOUT", 5*time.Second),
 		},
 		Storage: Storage{

@@ -197,11 +197,33 @@ now and expensive after two more phases of persisted state have accumulated.
 
 | Item | Status | Risk |
 |---|---|---|
-| Docker image and compose | **Never run** — no Docker on the dev machine | The image is unverified. It should be built in CI before any deployment is attempted. |
+| Docker image and compose | **Never run** — see below | The image is unverified. It should be built in CI before any deployment is attempted. |
 | `go test -race` | **Never run** — Windows, no cgo | The scheduler and worker are concurrent. This is the one gap I would close first: run the suite with `-race` on a Linux CI runner. |
+| Running the gateway as a live process | **Closed** — `make devstack` | Was the largest gap: every phase was verified by test and none had ever run as a process. |
 
-Neither is a code problem and both are cheap to close. The `-race` gap matters
-more after Phase 2, which added a second concurrent subsystem.
+Neither remaining item is a code problem and both are cheap to close. The
+`-race` gap matters more after Phase 2, which added a second concurrent
+subsystem.
+
+**On Docker, precisely.** Docker Desktop *is* installed on the dev machine and
+its processes run, but the Linux engine answers every API call with a 500. The
+cause is underneath it: `wsl --status` and `wsl -l -v` both return the usage
+text rather than an answer, so WSL2 is not installed and the engine has no
+backend to start. `docker compose up` was therefore never going to work here.
+Closing it needs `wsl --install` as administrator and a reboot — a machine
+change, not a code change.
+
+**What replaced it.** `cmd/devstack` runs the entire stack with only a Go
+toolchain: embedded PostgreSQL, in-process Redis, stub EasyEcom and Vinculum
+servers, real `cmd/server` as a child process, and one order driven from
+webhook to vendor. It is not a substitute for building the image in CI — it
+proves the application, not the container — but it removes the standing
+awkwardness that nothing had ever been watched running.
+
+The stubs are a safety property, not a convenience. Every outbound base URL
+points at a server the tool owns and the generated environment is passed via
+`ENV_FILE` so a real `.env` is not read, because B17 means a dev stack able to
+reach BCPL production is a way to ship a parcel by accident.
 
 ---
 

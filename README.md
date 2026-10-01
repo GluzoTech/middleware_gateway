@@ -11,6 +11,29 @@ is implemented yet; Vinculum eRetail is the first, see
 
 ## Quick start
 
+Nothing installed? This needs only a Go toolchain — no Docker, no PostgreSQL,
+no Redis:
+
+```bash
+go run ./cmd/devstack    # or, where make is installed: make devstack
+```
+
+It starts an embedded PostgreSQL and an in-process Redis, stands up stub
+EasyEcom and Vinculum servers, provisions the credentials, route and SKU
+mapping, launches the real `cmd/server`, then posts one webhook and waits for
+the order to reach the vendor. It prints the admin log URL and a curl command
+for sending another, and tears everything down on Ctrl+C. `-once` exits as
+soon as the order lands, which is what a smoke test wants.
+
+The stub vendors are deliberate: every outbound base URL points at a server
+the tool owns, and the generated environment is passed through `ENV_FILE` so
+a `.env` holding real credentials is not read. Several Vinculum request field
+names are still unverified (see [docs/blockers.md](docs/blockers.md)), so a
+dev stack that could reach a real warehouse would be a way to ship a parcel
+by accident.
+
+With Docker:
+
 ```bash
 cp .env.example .env
 docker compose up --build -d
@@ -20,14 +43,22 @@ curl http://localhost:8080/health
 Or, with PostgreSQL and Redis already running:
 
 ```bash
-cp .env.example .env
+cp .env.example .env    # then edit it: DATABASE_URL and REDIS_URL at least
 go run ./cmd/server
 ```
 
+Both commands read `.env` from the working directory at start-up and set only
+the variables the environment has not already set, so an exported value still
+wins and a deployment that ships no file behaves as before. `ENV_FILE` points
+at a different file. Configuration itself still comes from the environment
+alone (`app/config`); the file is just a convenient way to populate it while
+developing.
+
 ## Provision credentials
 
+`gatewayctl` reads the same `.env`, so `DATABASE_URL` needs no export:
+
 ```bash
-export DATABASE_URL=postgres://gluzo:gluzo@localhost:5432/gluzo_gateway?sslmode=disable
 go run ./cmd/gatewayctl platform create --name easyecom --type source
 go run ./cmd/gatewayctl platform create --name vinculum --type destination
 go run ./cmd/gatewayctl integration create --name easyecom-vinculum --source easyecom --destination vinculum
